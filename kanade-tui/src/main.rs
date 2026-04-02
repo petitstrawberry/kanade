@@ -4,7 +4,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let log_path = std::env::var("LOG_PATH").unwrap_or_else(|_| "kanade.log".to_string());
+    let log_path = std::env::var("LOG_PATH").unwrap_or_else(|_| "kanade-tui.log".to_string());
     let log_file = std::fs::File::create(&log_path)?;
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -20,9 +20,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "ws://127.0.0.1:8080".to_string());
 
     let (ws_rx, ws_tx) = ws::connect(&ws_url).await?;
-    let event_rx = kanade_tui::spawn_event_task();
 
-    kanade_tui::run(ws_rx, ws_tx, event_rx).await?;
+    kanade_tui::run(ws_rx, ws_tx).await?;
 
     info!("kanade-tui shutting down.");
     Ok(())

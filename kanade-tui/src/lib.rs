@@ -13,10 +13,14 @@ pub mod ws;
 pub async fn run(
     mut ws_rx: mpsc::Receiver<ServerMessage>,
     ws_tx: mpsc::Sender<ClientMessage>,
-    mut event_rx: mpsc::Receiver<AppEvent>,
 ) -> Result<()> {
+    // Raw mode must be enabled BEFORE spawning the event thread,
+    // because crossterm::event::read() requires raw mode on the same terminal.
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)?;
+
+    // Now spawn the event poll thread (must be after raw mode).
+    let mut event_rx = spawn_event_task();
 
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -60,7 +64,8 @@ pub enum AppEvent {
     Key(crossterm::event::KeyEvent),
 }
 
-pub fn spawn_event_task() -> mpsc::Receiver<AppEvent> {
+/// Must be called AFTER `enable_raw_mode()`.
+fn spawn_event_task() -> mpsc::Receiver<AppEvent> {
     let (tx, rx) = mpsc::channel::<AppEvent>(32);
     std::thread::spawn(move || {
         loop {

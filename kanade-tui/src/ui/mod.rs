@@ -14,7 +14,11 @@ use kanade_core::state::PlaybackState;
 pub fn draw(f: &mut Frame, app: &App, state: &PlaybackState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(f.area());
 
     render_tabs(f, chunks[0], app);
@@ -25,6 +29,8 @@ pub fn draw(f: &mut Frame, app: &App, state: &PlaybackState) {
         Panel::Library => render_library(f, chunks[1], app),
         Panel::Search => render_search(f, chunks[1], app),
     }
+
+    render_help(f, chunks[2], app);
 }
 
 fn render_tabs(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
@@ -75,51 +81,51 @@ fn render_queue(f: &mut Frame, area: ratatui::layout::Rect, app: &App, state: &P
         .highlight_style(highlight)
         .highlight_symbol("> ");
 
-    let mut list_state = app.queue_list_state.clone();
+    let mut list_state = app.queue_list.borrow_mut();
     if !queue.is_empty() && list_state.selected().is_none() {
         list_state.select(Some(0));
     }
-    if !queue.is_empty() {
-        if let Some(sel) = list_state.selected() {
-            if sel >= queue.len() {
-                list_state.select(Some(queue.len() - 1));
-            }
+    if let Some(sel) = list_state.selected() {
+        if !queue.is_empty() && sel >= queue.len() {
+            list_state.select(Some(queue.len() - 1));
         }
     }
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let (title, items): (String, Vec<ListItem>) = if app.in_album_view {
-        (
-            "Tracks".to_string(),
-            app.album_tracks
-                .iter()
-                .map(|t| {
-                    let name = t.title.as_deref().unwrap_or("(untitled)");
-                    let artist = t.artist.as_deref().unwrap_or("");
-                    if artist.is_empty() {
-                        ListItem::new(name.to_string())
-                    } else {
-                        ListItem::new(format!("{name} - {artist}"))
-                    }
-                })
-                .collect(),
-        )
-    } else {
-        (
-            "Library".to_string(),
-            app.albums
-                .iter()
-                .map(|album| {
-                    let t = album.title.as_deref().unwrap_or("(untitled album)");
-                    ListItem::new(t.to_string())
-                })
-                .collect(),
-        )
-    };
+    let has_items: bool;
+    let title: String;
+    let items: Vec<ListItem>;
 
-    let has_items = !items.is_empty();
+    if app.in_album_view {
+        has_items = !app.album_tracks.is_empty();
+        title = "Tracks (Enter: add to queue, Esc: back)".to_string();
+        items = app
+            .album_tracks
+            .iter()
+            .map(|t| {
+                let name = t.title.as_deref().unwrap_or("(untitled)");
+                let artist = t.artist.as_deref().unwrap_or("");
+                if artist.is_empty() {
+                    ListItem::new(name.to_string())
+                } else {
+                    ListItem::new(format!("{name} - {artist}"))
+                }
+            })
+            .collect();
+    } else {
+        has_items = !app.albums.is_empty();
+        title = "Albums (Enter: open, Tab/BackTab: switch)".to_string();
+        items = app
+            .albums
+            .iter()
+            .map(|album| {
+                let t = album.title.as_deref().unwrap_or("(untitled album)");
+                ListItem::new(t.to_string())
+            })
+            .collect();
+    }
 
     let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
 
@@ -128,7 +134,7 @@ fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         .highlight_style(highlight)
         .highlight_symbol("> ");
 
-    let mut list_state = app.library_list_state.clone();
+    let mut list_state = app.library_list.borrow_mut();
     if has_items && list_state.selected().is_none() {
         list_state.select(Some(0));
     }
@@ -150,11 +156,14 @@ fn render_search(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(area);
 
-    let search_input =
-        Paragraph::new(query_line).block(Block::default().title("Search").borders(Borders::ALL));
+    let search_input = Paragraph::new(query_line).block(
+        Block::default()
+            .title("Search (Esc: clear)")
+            .borders(Borders::ALL),
+    );
     f.render_widget(search_input, chunks[0]);
 
     let results: Vec<ListItem> = app
@@ -171,7 +180,37 @@ fn render_search(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         })
         .collect();
 
-    let results_list =
-        List::new(results).block(Block::default().title("Results").borders(Borders::ALL));
-    f.render_widget(results_list, chunks[1]);
+    let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
+
+    let results_list = List::new(results)
+        .block(
+            Block::default()
+                .title("Results (Enter: add to queue)")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(highlight)
+        .highlight_symbol("> ");
+
+    let mut list_state = app.search_list.borrow_mut();
+    if !app.search_results.is_empty() && list_state.selected().is_none() {
+        list_state.select(Some(0));
+    }
+    f.render_stateful_widget(results_list, chunks[1], &mut list_state);
+}
+
+fn render_help(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let help = match app.active_panel {
+        Panel::NowPlaying => {
+            "Space:play/pause  n:next  p:prev  s:stop  +/-:vol  Tab:switch  q:quit"
+        }
+        Panel::Queue => "↑/↓:navigate  Enter:play  Tab:switch  q:quit",
+        Panel::Library => "↑/↓:navigate  Enter:open/add  Esc:back  Tab:switch  q:quit",
+        Panel::Search => {
+            "type:search  ↑/↓:navigate  Enter:add to queue  Esc:clear  Tab:switch  q:quit"
+        }
+    };
+
+    let line = Line::from(Span::styled(help, Style::default().fg(Color::DarkGray)));
+    let content = Paragraph::new(line);
+    f.render_widget(content, area);
 }
