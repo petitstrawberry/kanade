@@ -1,6 +1,6 @@
 # Kanade
 
-**奏で** — A self-hosted music player server written in Rust.
+**奏** — A self-hosted music player server written in Rust.
 
 Kanade sits between your music collection and your audio output, providing a
 unified playback API that multiple frontends can consume simultaneously.
