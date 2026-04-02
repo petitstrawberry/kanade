@@ -10,6 +10,8 @@ pub trait AudioOutput: Send + Sync {
     async fn set_volume(&self, volume: u8) -> Result<(), CoreError>;
     async fn set_queue(&self, file_paths: &[String]) -> Result<(), CoreError>;
     async fn add(&self, file_paths: &[String]) -> Result<(), CoreError>;
+    async fn remove(&self, index: usize) -> Result<(), CoreError>;
+    async fn move_track(&self, from: usize, to: usize) -> Result<(), CoreError>;
 }
 
 #[async_trait]

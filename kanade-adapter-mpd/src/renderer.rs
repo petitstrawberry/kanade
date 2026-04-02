@@ -103,4 +103,18 @@ impl AudioOutput for MpdRenderer {
         self.client.send(&cmd).await?;
         Ok(())
     }
+
+    /// Remove the track at the given position from the MPD queue.
+    #[instrument(skip(self))]
+    async fn remove(&self, index: usize) -> Result<(), CoreError> {
+        self.client.send(&format!("delete {index}\n")).await?;
+        Ok(())
+    }
+
+    /// Move the track at `from` position to `to` position in the MPD queue.
+    #[instrument(skip(self))]
+    async fn move_track(&self, from: usize, to: usize) -> Result<(), CoreError> {
+        self.client.send(&format!("move {from} {to}\n")).await?;
+        Ok(())
+    }
 }

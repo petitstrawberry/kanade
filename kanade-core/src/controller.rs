@@ -264,9 +264,8 @@ impl Core {
             }
             _ => {}
         }
-        let queue = Self::build_queue_file_paths(zone);
         drop(s);
-        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        for o in self.each_output(zone_id).await? { o.remove(index).await?; }
         self.broadcast().await;
         Ok(())
     }
@@ -296,9 +295,8 @@ impl Core {
             }
             _ => {}
         }
-        let queue = Self::build_queue_file_paths(zone);
         drop(s);
-        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        for o in self.each_output(zone_id).await? { o.move_track(from, to).await?; }
         self.broadcast().await;
         Ok(())
     }
