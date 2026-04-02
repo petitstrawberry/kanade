@@ -397,6 +397,7 @@ impl App {
                     .select(if self.artists.is_empty() { None } else { Some(0) });
             }
             WsResponse::ArtistAlbums { albums } => {
+                tracing::info!("ArtistAlbums response: {} albums", albums.len());
                 let empty = albums.is_empty();
                 self.artist_albums = albums;
                 self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
@@ -413,6 +414,7 @@ impl App {
                     .select(if self.genres.is_empty() { None } else { Some(0) });
             }
             WsResponse::GenreAlbums { albums } => {
+                tracing::info!("GenreAlbums response: {} albums", albums.len());
                 let empty = albums.is_empty();
                 self.genre_albums = albums;
                 self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
@@ -625,13 +627,20 @@ impl App {
             }
             Panel::Library => {
                 if self.library_level > 0 {
-                    let len = self.library_browse_tracks().len();
+                    let detail_len = if (self.library_mode == LibraryMode::Artists
+                        || self.library_mode == LibraryMode::Genres)
+                        && self.library_level == 1
+                    {
+                        1 + self.library_detail_albums().len()
+                    } else {
+                        self.library_browse_tracks().len()
+                    };
                     let mut list = self.library_detail.borrow_mut();
                     let cur = list.selected().unwrap_or(0);
                     if cur > 0 {
                         list.select(Some(cur - 1));
                     }
-                    let _ = len;
+                    let _ = detail_len;
                 } else {
                     let mut list = self.library_list.borrow_mut();
                     let cur = list.selected().unwrap_or(0);
@@ -665,10 +674,17 @@ impl App {
             }
             Panel::Library => {
                 if self.library_level > 0 {
-                    let len = self.library_browse_tracks().len();
+                    let detail_len = if (self.library_mode == LibraryMode::Artists
+                        || self.library_mode == LibraryMode::Genres)
+                        && self.library_level == 1
+                    {
+                        1 + self.library_detail_albums().len()
+                    } else {
+                        self.library_browse_tracks().len()
+                    };
                     let mut list = self.library_detail.borrow_mut();
                     let cur = list.selected().unwrap_or(0);
-                    if len > 0 && cur + 1 < len {
+                    if detail_len > 0 && cur + 1 < detail_len {
                         list.select(Some(cur + 1));
                     }
                 } else {

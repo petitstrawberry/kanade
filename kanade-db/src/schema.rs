@@ -117,12 +117,14 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "2",
         r#"
             ALTER TABLE tracks ADD COLUMN genre TEXT;
+            UPDATE tracks SET mtime = NULL;
         "#,
     ),
     (
         "3",
         r#"
             ALTER TABLE tracks ADD COLUMN album_artist TEXT;
+            UPDATE tracks SET mtime = NULL;
         "#,
     ),
 ];

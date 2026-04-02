@@ -180,11 +180,27 @@ async fn handle_request(
             WsResponse::Artists { artists }
         }
         WsRequest::GetArtistAlbums { artist } => {
+            info!("GetArtistAlbums: artist={artist:?}");
             let path = db_path.clone();
             let albums = tokio::task::spawn_blocking(move || {
-                let db = Database::open(&path).ok()?;
-                db.get_albums_by_artist(&artist).ok()
-            }).await.unwrap_or(None).unwrap_or_default();
+                let db = match Database::open(&path) {
+                    Ok(db) => db,
+                    Err(e) => {
+                        tracing::error!("GetArtistAlbums: db open failed: {e}");
+                        return Vec::new();
+                    }
+                };
+                match db.get_albums_by_artist(&artist) {
+                    Ok(albums) => {
+                        info!("GetArtistAlbums: {} albums found", albums.len());
+                        albums
+                    }
+                    Err(e) => {
+                        tracing::error!("GetArtistAlbums: query failed: {e}");
+                        Vec::new()
+                    }
+                }
+            }).await.unwrap_or_default();
             WsResponse::ArtistAlbums { albums }
         }
         WsRequest::GetArtistTracks { artist } => {

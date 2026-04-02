@@ -340,7 +340,7 @@ impl Database {
                FROM tracks WHERE artist = ?1 OR album_artist = ?1
                ORDER BY album_title, track_number, title"#,
         )?;
-        let rows = stmt.query_map(params![artist, artist], row_to_track)?;
+        let rows = stmt.query_map(params![artist], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -352,7 +352,7 @@ impl Database {
                WHERE t.artist = ?1 OR t.album_artist = ?1
                ORDER BY a.title, a.dir_path"#,
         )?;
-        let rows = stmt.query_map(params![artist, artist], |row| {
+        let rows = stmt.query_map(params![artist], |row| {
             Ok(Album {
                 id: row.get(0)?,
                 dir_path: row.get(1)?,
