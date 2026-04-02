@@ -13,9 +13,7 @@ use kanade_adapter_mpd::{MpdClient, MpdRenderer, MpdStateSync};
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{WsBroadcaster, WsServer};
 
-mod media_server;
-
-use media_server::MediaServer;
+use kanade_server_http::MediaServer;
 
 #[tokio::main]
 async fn main() -> Result<()> {

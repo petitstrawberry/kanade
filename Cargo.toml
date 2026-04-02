@@ -6,6 +6,7 @@ members = [
     "kanade-adapter-mpd",
     "kanade-adapter-ws",
     "kanade-adapter-openhome",
+    "kanade-server-http",
     "kanade-tui",
     "kanade",
 ]

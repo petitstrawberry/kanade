@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use crossterm::event::KeyCode;
-use kanade_adapter_ws::command::{ClientMessage, WsCommand, WsRequest, WsResponse};
+use kanade_adapter_ws::{ClientMessage, WsCommand, WsRequest, WsResponse};
 use kanade_core::state::PlaybackState;
 use ratatui::widgets::ListState;
 use tokio::sync::mpsc;

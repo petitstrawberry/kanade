@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
-use kanade_adapter_ws::command::{ClientMessage, ServerMessage};
+use kanade_adapter_ws::{ClientMessage, ServerMessage};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};

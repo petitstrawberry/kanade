@@ -14,6 +14,7 @@ kanade-scanner = { path = "../kanade-scanner" }
 kanade-adapter-mpd = { path = "../kanade-adapter-mpd" }
 kanade-adapter-ws = { path = "../kanade-adapter-ws" }
 kanade-adapter-openhome = { path = "../kanade-adapter-openhome" }
+kanade-server-http = { path = "../kanade-server-http" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

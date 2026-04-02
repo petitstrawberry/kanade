@@ -1,6 +1,6 @@
 use anyhow::Result;
 use kanade_core::state::PlaybackState;
-use kanade_adapter_ws::command::{ClientMessage, ServerMessage};
+use kanade_adapter_ws::{ClientMessage, ServerMessage};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 

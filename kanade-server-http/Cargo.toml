@@ -1,0 +1,9 @@
+[package]
+name = "kanade-server-http"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kanade-db = { path = "../kanade-db" }
+tokio = { workspace = true }
+tracing = { workspace = true }
