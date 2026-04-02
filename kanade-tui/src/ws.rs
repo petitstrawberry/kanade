@@ -3,7 +3,7 @@ use futures_util::{SinkExt, StreamExt};
 use kanade_adapter_ws::command::{ClientMessage, ServerMessage};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 pub async fn connect(
     addr: &str,
@@ -26,6 +26,7 @@ pub async fn connect(
                 msg = ws_rx.next() => {
                     match msg {
                         Some(Ok(Message::Text(text))) => {
+                            debug!("WS IN: {text}");
                             match serde_json::from_str::<ServerMessage>(&text) {
                                 Ok(server_msg) => {
                                     if in_tx.send(server_msg).await.is_err() {
@@ -56,6 +57,7 @@ pub async fn connect(
                             continue;
                         }
                     };
+                    debug!("WS OUT: {json}");
                     if ws_tx.send(Message::Text(json)).await.is_err() {
                         error!("Failed to send command to server");
                         break;

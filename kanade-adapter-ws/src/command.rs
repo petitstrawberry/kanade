@@ -48,7 +48,10 @@ pub enum WsResponse {
     Albums {
         albums: Vec<Album>,
     },
-    Tracks {
+    AlbumTracks {
+        tracks: Vec<Track>,
+    },
+    SearchResults {
         tracks: Vec<Track>,
     },
     Queue {

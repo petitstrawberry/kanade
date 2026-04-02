@@ -144,13 +144,23 @@ fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 fn render_search(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let query_line = if app.search_query.is_empty() {
         Line::from(Span::styled(
-            "Type to search...",
+            if app.in_search_input {
+                "Type to search..."
+            } else {
+                "Press / to start typing..."
+            },
             Style::default().fg(Color::DarkGray),
         ))
     } else {
         Line::from(Span::styled(
             format!("/{}", app.search_query),
-            Style::default().fg(Color::Yellow),
+            if app.in_search_input {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow)
+            },
         ))
     };
 
@@ -161,7 +171,11 @@ fn render_search(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 
     let search_input = Paragraph::new(query_line).block(
         Block::default()
-            .title("Search (Esc: clear)")
+            .title(if app.in_search_input {
+                "Search (Enter: finish, Esc: cancel)"
+            } else {
+                "Search (/ to edit, Esc: clear)"
+            })
             .borders(Borders::ALL),
     );
     f.render_widget(search_input, chunks[0]);
@@ -206,7 +220,11 @@ fn render_help(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         Panel::Queue => "↑/↓:navigate  Enter:play  Tab:switch  q:quit",
         Panel::Library => "↑/↓:navigate  Enter:open/add  Esc:back  Tab:switch  q:quit",
         Panel::Search => {
-            "type:search  ↑/↓:navigate  Enter:add to queue  Esc:clear  Tab:switch  q:quit"
+            if app.in_search_input {
+                "type:search  Backspace:delete  Enter:finish  Esc:cancel  q:quit"
+            } else {
+                "/:edit  ↑/↓:navigate  Enter:add to queue  Esc:clear  q:quit"
+            }
         }
     };
 

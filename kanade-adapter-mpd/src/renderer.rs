@@ -14,7 +14,6 @@ pub struct MpdRenderer {
 }
 
 impl MpdRenderer {
-    /// Create a new renderer targeting `host:port`.
     pub fn new(host: impl Into<String>, port: u16) -> Self {
         Self { client: MpdClient::new(host, port) }
     }

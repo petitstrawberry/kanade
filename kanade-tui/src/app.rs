@@ -63,6 +63,7 @@ pub struct App {
     pub in_album_view: bool,
     pub active_zone_id: String,
     pub req_counter: u64,
+    pub in_search_input: bool,
 }
 
 impl App {
@@ -89,6 +90,7 @@ impl App {
             in_album_view: false,
             active_zone_id: "default".to_string(),
             req_counter: 1,
+            in_search_input: false,
         }
     }
 
@@ -96,19 +98,21 @@ impl App {
         match data {
             WsResponse::Albums { albums } => {
                 self.albums = albums;
-                self.library_list.borrow_mut().select(None);
+                self.library_list
+                    .borrow_mut()
+                    .select(if self.albums.is_empty() { None } else { Some(0) });
             }
-            WsResponse::Tracks { tracks } => {
+            WsResponse::AlbumTracks { tracks } => {
                 let empty = tracks.is_empty();
-                if self.in_album_view {
-                    self.album_tracks = tracks;
-                    let mut list = self.library_list.borrow_mut();
-                    list.select(if empty { None } else { Some(0) });
-                } else {
-                    self.search_results = tracks;
-                    let mut list = self.search_list.borrow_mut();
-                    list.select(if empty { None } else { Some(0) });
-                }
+                self.album_tracks = tracks;
+                let mut list = self.library_list.borrow_mut();
+                list.select(if empty { None } else { Some(0) });
+            }
+            WsResponse::SearchResults { tracks } => {
+                let empty = tracks.is_empty();
+                self.search_results = tracks;
+                let mut list = self.search_list.borrow_mut();
+                list.select(if empty { None } else { Some(0) });
             }
             WsResponse::Queue { tracks: _, current_index: _ } => {}
         }
@@ -117,6 +121,45 @@ impl App {
     pub async fn handle_event(&mut self, event: AppEvent, state: &PlaybackState) {
         let AppEvent::Key(key) = event;
         let zone_id = self.active_zone_id.clone();
+
+        if self.active_panel == Panel::Search && self.in_search_input {
+            match key.code {
+                KeyCode::Esc => {
+                    self.in_search_input = false;
+                    return;
+                }
+                KeyCode::Enter => {
+                    self.in_search_input = false;
+                    self.search_list
+                        .borrow_mut()
+                        .select(if self.search_results.is_empty() { None } else { Some(0) });
+                    return;
+                }
+                KeyCode::Backspace => {
+                    self.search_query.pop();
+                }
+                KeyCode::Char(c) => {
+                    if !c.is_control() {
+                        self.search_query.push(c);
+                    }
+                }
+                _ => return,
+            }
+
+            self.req_counter += 1;
+            let req_id = self.req_counter;
+            let query = self.search_query.clone();
+            let tx = self.ws_tx.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(ClientMessage::Request {
+                        req_id,
+                        req: WsRequest::Search { query },
+                    })
+                    .await;
+            });
+            return;
+        }
 
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
@@ -129,36 +172,95 @@ impl App {
                     self.search_query.clear();
                     self.search_results.clear();
                     self.search_list.borrow_mut().select(None);
+                    self.in_search_input = false;
                 }
             }
             KeyCode::Tab => {
-                self.active_panel = self.active_panel.next();
+                if !self.in_search_input {
+                    self.active_panel = self.active_panel.next();
+                }
             }
             KeyCode::BackTab => {
-                self.active_panel = self.active_panel.prev();
+                if !self.in_search_input {
+                    self.active_panel = self.active_panel.prev();
+                }
             }
             KeyCode::Char(' ') => {
-                let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::Play { zone_id: zone_id.clone() })).await;
+                if self.active_panel != Panel::Search {
+                    let tx = self.ws_tx.clone();
+                    let zid = zone_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(ClientMessage::Command(WsCommand::Play { zone_id: zid }))
+                            .await;
+                    });
+                }
             }
             KeyCode::Char('n') => {
-                let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::Next { zone_id: zone_id.clone() })).await;
+                if self.active_panel != Panel::Search {
+                    let tx = self.ws_tx.clone();
+                    let zid = zone_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(ClientMessage::Command(WsCommand::Next { zone_id: zid }))
+                            .await;
+                    });
+                }
             }
             KeyCode::Char('p') => {
-                let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::Previous { zone_id: zone_id.clone() })).await;
+                if self.active_panel != Panel::Search {
+                    let tx = self.ws_tx.clone();
+                    let zid = zone_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(ClientMessage::Command(WsCommand::Previous { zone_id: zid }))
+                            .await;
+                    });
+                }
             }
             KeyCode::Char('s') => {
-                let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::Stop { zone_id: zone_id.clone() })).await;
+                if self.active_panel != Panel::Search {
+                    let tx = self.ws_tx.clone();
+                    let zid = zone_id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(ClientMessage::Command(WsCommand::Stop { zone_id: zid }))
+                            .await;
+                    });
+                }
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                if let Some(zone) = state.zone(&zone_id) {
-                    let vol = zone.volume.saturating_add(5).min(100);
-                    let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::SetVolume { zone_id: zone_id.clone(), volume: vol })).await;
+                if self.active_panel != Panel::Search {
+                    if let Some(zone) = state.zone(&zone_id) {
+                        let vol = zone.volume.saturating_add(5).min(100);
+                        let tx = self.ws_tx.clone();
+                        let zid = zone_id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::SetVolume {
+                                    zone_id: zid,
+                                    volume: vol,
+                                }))
+                                .await;
+                        });
+                    }
                 }
             }
             KeyCode::Char('-') => {
-                if let Some(zone) = state.zone(&zone_id) {
-                    let vol = zone.volume.saturating_sub(5);
-                    let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::SetVolume { zone_id: zone_id.clone(), volume: vol })).await;
+                if self.active_panel != Panel::Search {
+                    if let Some(zone) = state.zone(&zone_id) {
+                        let vol = zone.volume.saturating_sub(5);
+                        let tx = self.ws_tx.clone();
+                        let zid = zone_id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::SetVolume {
+                                    zone_id: zid,
+                                    volume: vol,
+                                }))
+                                .await;
+                        });
+                    }
                 }
             }
             KeyCode::Up => self.select_prev(state),
@@ -166,33 +268,13 @@ impl App {
             KeyCode::Enter => self.select_item(state).await,
             KeyCode::Char('/') => {
                 self.active_panel = Panel::Search;
-                self.search_query.clear();
-            }
-            KeyCode::Backspace => {
-                if self.active_panel == Panel::Search {
-                    self.search_query.pop();
-                }
-            }
-            KeyCode::Char(c) if self.active_panel == Panel::Search => {
-                if !c.is_control() {
-                    self.search_query.push(c);
-                    self.req_counter += 1;
-                    let req_id = self.req_counter;
-                    let query = self.search_query.clone();
-                    let tx = self.ws_tx.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Request {
-                            req_id,
-                            req: WsRequest::Search { query },
-                        }).await;
-                    });
-                }
+                self.in_search_input = true;
             }
             _ => {}
         }
     }
 
-    fn select_prev(&self, state: &PlaybackState) {
+    fn select_prev(&self, _state: &PlaybackState) {
         match self.active_panel {
             Panel::Queue => {
                 let mut list = self.queue_list.borrow_mut();
@@ -261,7 +343,7 @@ impl App {
         }
     }
 
-    async fn select_item(&mut self, state: &PlaybackState) {
+    async fn select_item(&mut self, _state: &PlaybackState) {
         let zone_id = self.active_zone_id.clone();
 
         match self.active_panel {
@@ -270,10 +352,15 @@ impl App {
                     let idx = self.library_list.borrow().selected();
                     if let Some(i) = idx {
                         if let Some(track) = self.album_tracks.get(i).cloned() {
-                            let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                zone_id,
-                                track,
-                            })).await;
+                            let tx = self.ws_tx.clone();
+                            tokio::spawn(async move {
+                                let _ = tx
+                                    .send(ClientMessage::Command(WsCommand::AddToQueue {
+                                        zone_id,
+                                        track,
+                                    }))
+                                    .await;
+                            });
                         }
                     }
                 } else {
@@ -285,6 +372,7 @@ impl App {
                             let album_id = album.id.clone();
                             let tx = self.ws_tx.clone();
                             self.in_album_view = true;
+                            self.library_list.borrow_mut().select(None);
                             tokio::spawn(async move {
                                 let _ = tx.send(ClientMessage::Request {
                                     req_id,
@@ -299,20 +387,30 @@ impl App {
                 let idx = self.search_list.borrow().selected();
                 if let Some(i) = idx {
                     if let Some(track) = self.search_results.get(i).cloned() {
-                        let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                            zone_id,
-                            track,
-                        })).await;
+                        let tx = self.ws_tx.clone();
+                        tokio::spawn(async move {
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::AddToQueue {
+                                    zone_id,
+                                    track,
+                                }))
+                                .await;
+                        });
                     }
                 }
             }
             Panel::Queue => {
                 let idx = self.queue_list.borrow().selected();
                 if let Some(i) = idx {
-                    let _ = self.ws_tx.send(ClientMessage::Command(WsCommand::PlayIndex {
-                        zone_id,
-                        index: i,
-                    })).await;
+                    let tx = self.ws_tx.clone();
+                    tokio::spawn(async move {
+                        let _ = tx
+                            .send(ClientMessage::Command(WsCommand::PlayIndex {
+                                zone_id,
+                                index: i,
+                            }))
+                            .await;
+                    });
                 }
             }
             Panel::NowPlaying => {}

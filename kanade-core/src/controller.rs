@@ -121,10 +121,15 @@ impl Core {
         };
         zone.current_index = Some(next);
         zone.position_secs = 0.0;
-        zone.status = PlaybackStatus::Playing;
         let queue = Self::build_queue_file_paths(zone);
         drop(s);
         for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        for o in self.each_output(zone_id).await? { o.play().await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.status = PlaybackStatus::Playing;
+        }
+        drop(s);
         self.broadcast().await;
         Ok(())
     }
@@ -145,10 +150,15 @@ impl Core {
         };
         zone.current_index = Some(prev);
         zone.position_secs = 0.0;
-        zone.status = PlaybackStatus::Playing;
         let queue = Self::build_queue_file_paths(zone);
         drop(s);
         for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        for o in self.each_output(zone_id).await? { o.play().await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.status = PlaybackStatus::Playing;
+        }
+        drop(s);
         self.broadcast().await;
         Ok(())
     }
@@ -269,11 +279,15 @@ impl Core {
         }
         zone.current_index = Some(index);
         zone.position_secs = 0.0;
-        zone.status = PlaybackStatus::Playing;
         let queue = Self::build_queue_file_paths(zone);
         drop(s);
-        for o in self.each_output(zone_id).await? { o.play().await?; }
         for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        for o in self.each_output(zone_id).await? { o.play().await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.status = PlaybackStatus::Playing;
+        }
+        drop(s);
         self.broadcast().await;
         Ok(())
     }

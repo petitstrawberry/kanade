@@ -9,7 +9,7 @@ use kanade_core::{
 use kanade_scanner::spawn_background_scan;
 use tracing::info;
 
-use kanade_adapter_mpd::MpdRenderer;
+use kanade_adapter_mpd::{MpdClient, MpdRenderer, MpdStateSync};
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{WsBroadcaster, WsServer};
 
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         .unwrap_or(6600);
 
     let mpd_output: Arc<dyn kanade_core::ports::AudioOutput> =
-        Arc::new(MpdRenderer::new(mpd_host, mpd_port));
+        Arc::new(MpdRenderer::new(mpd_host.clone(), mpd_port));
 
     let (ws_broadcaster, _ws_rx) = WsBroadcaster::new(64);
     let oh_broadcaster = OpenHomeBroadcaster::new();
@@ -61,6 +61,16 @@ async fn main() -> Result<()> {
     core.add_zone(default_zone).await;
 
     let core = Arc::new(core);
+
+    let mpd_sync = MpdStateSync::new(
+        mpd_host.clone(),
+        mpd_port,
+        MpdClient::new(mpd_host, mpd_port),
+        core.state_handle(),
+    );
+    tokio::spawn(async move {
+        mpd_sync.run().await;
+    });
 
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "kanade.db".to_string());
     let _db = Arc::new(kanade_db::Database::open(&db_path)?);

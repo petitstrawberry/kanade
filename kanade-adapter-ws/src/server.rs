@@ -85,6 +85,7 @@ async fn handle_connection(
                                 dispatch_command(cmd, &core).await;
                             }
                             Ok(ClientMessage::Request { req_id, req }) => {
+                                debug!("WS request from {peer}: {:?}", req);
                                 let resp = handle_request(req, &core, &db_path).await;
                                 let msg = ServerMessage::Response { req_id, data: resp };
                                 if let Ok(json) = serde_json::to_string(&msg) {
@@ -125,6 +126,7 @@ async fn handle_connection(
 }
 
 async fn dispatch_command(cmd: WsCommand, core: &Core) {
+    debug!("WS command: {:?}", cmd);
     let result = match cmd {
         WsCommand::Play { zone_id } => core.play_zone(&zone_id).await,
         WsCommand::Pause { zone_id } => core.pause_zone(&zone_id).await,
@@ -142,7 +144,7 @@ async fn dispatch_command(cmd: WsCommand, core: &Core) {
         WsCommand::ClearQueue { zone_id } => core.clear_zone_queue(&zone_id).await,
     };
     if let Err(e) = result {
-        debug!("WS dispatch error: {e}");
+        warn!("WS dispatch error: {e}");
     }
 }
 
@@ -166,7 +168,7 @@ async fn handle_request(
                 let db = Database::open(&path).ok()?;
                 db.get_tracks_by_album_id(&album_id).ok()
             }).await.unwrap_or(None).unwrap_or_default();
-            WsResponse::Tracks { tracks }
+            WsResponse::AlbumTracks { tracks }
         }
         WsRequest::Search { query } => {
             let path = db_path.clone();
@@ -174,7 +176,7 @@ async fn handle_request(
                 let db = Database::open(&path).ok()?;
                 db.search_tracks(&query).ok()
             }).await.unwrap_or(None).unwrap_or_default();
-            WsResponse::Tracks { tracks }
+            WsResponse::SearchResults { tracks }
         }
         WsRequest::GetQueue { zone_id } => {
             let state = core.state_handle();
