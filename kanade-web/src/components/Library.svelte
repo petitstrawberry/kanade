@@ -66,6 +66,7 @@
     selectedArtist = artist;
     selectedAlbum = null;
     currentTracks = [];
+    albums = [];
     ws.sendRequest({ req: 'get_artist_albums', artist }).then(res => {
       if ('albums' in res) albums = res.albums;
     }).catch(() => {});
@@ -75,6 +76,7 @@
     selectedGenre = genre;
     selectedAlbum = null;
     currentTracks = [];
+    albums = [];
     ws.sendRequest({ req: 'get_genre_albums', genre }).then(res => {
       if ('albums' in res) albums = res.albums;
     }).catch(() => {});
