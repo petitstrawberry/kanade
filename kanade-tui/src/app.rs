@@ -49,6 +49,39 @@ impl Panel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryMode {
+    Albums,
+    Artists,
+    Genres,
+}
+
+impl LibraryMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            LibraryMode::Albums => "Albums",
+            LibraryMode::Artists => "Artists",
+            LibraryMode::Genres => "Genres",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            LibraryMode::Albums => LibraryMode::Artists,
+            LibraryMode::Artists => LibraryMode::Genres,
+            LibraryMode::Genres => LibraryMode::Albums,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            LibraryMode::Albums => LibraryMode::Genres,
+            LibraryMode::Artists => LibraryMode::Albums,
+            LibraryMode::Genres => LibraryMode::Artists,
+        }
+    }
+}
+
 pub struct App {
     pub ws_tx: mpsc::Sender<ClientMessage>,
     pub active_panel: Panel,
@@ -60,7 +93,13 @@ pub struct App {
     pub search_results: Vec<kanade_core::model::Track>,
     pub albums: Vec<kanade_core::model::Album>,
     pub album_tracks: Vec<kanade_core::model::Track>,
+    pub artists: Vec<String>,
+    pub artist_tracks: Vec<kanade_core::model::Track>,
+    pub genres: Vec<String>,
+    pub genre_tracks: Vec<kanade_core::model::Track>,
     pub in_album_view: bool,
+    pub library_mode: LibraryMode,
+    pub library_browse_view: bool,
     pub active_zone_id: String,
     pub req_counter: u64,
     pub in_search_input: bool,
@@ -87,11 +126,55 @@ impl App {
             search_results: Vec::new(),
             albums: Vec::new(),
             album_tracks: Vec::new(),
+            artists: Vec::new(),
+            artist_tracks: Vec::new(),
+            genres: Vec::new(),
+            genre_tracks: Vec::new(),
             in_album_view: false,
+            library_mode: LibraryMode::Albums,
+            library_browse_view: false,
             active_zone_id: "default".to_string(),
             req_counter: 1,
             in_search_input: false,
         }
+    }
+
+    fn library_items(&self) -> usize {
+        if self.library_browse_view {
+            match self.library_mode {
+                LibraryMode::Albums => self.album_tracks.len(),
+                LibraryMode::Artists => self.artist_tracks.len(),
+                LibraryMode::Genres => self.genre_tracks.len(),
+            }
+        } else {
+            match self.library_mode {
+                LibraryMode::Albums => self.albums.len(),
+                LibraryMode::Artists => self.artists.len(),
+                LibraryMode::Genres => self.genres.len(),
+            }
+        }
+    }
+
+    pub fn library_browse_tracks(&self) -> &[kanade_core::model::Track] {
+        match self.library_mode {
+            LibraryMode::Albums => &self.album_tracks,
+            LibraryMode::Artists => &self.artist_tracks,
+            LibraryMode::Genres => &self.genre_tracks,
+        }
+    }
+
+    fn request_library_list(&mut self) {
+        self.req_counter += 1;
+        let req_id = self.req_counter;
+        let tx = self.ws_tx.clone();
+        let req = match self.library_mode {
+            LibraryMode::Albums => WsRequest::GetAlbums,
+            LibraryMode::Artists => WsRequest::GetArtists,
+            LibraryMode::Genres => WsRequest::GetGenres,
+        };
+        tokio::spawn(async move {
+            let _ = tx.send(ClientMessage::Request { req_id, req }).await;
+        });
     }
 
     pub fn handle_response(&mut self, data: WsResponse) {
@@ -105,6 +188,30 @@ impl App {
             WsResponse::AlbumTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.album_tracks = tracks;
+                let mut list = self.library_list.borrow_mut();
+                list.select(if empty { None } else { Some(0) });
+            }
+            WsResponse::Artists { artists } => {
+                self.artists = artists;
+                self.library_list
+                    .borrow_mut()
+                    .select(if self.artists.is_empty() { None } else { Some(0) });
+            }
+            WsResponse::ArtistTracks { tracks } => {
+                let empty = tracks.is_empty();
+                self.artist_tracks = tracks;
+                let mut list = self.library_list.borrow_mut();
+                list.select(if empty { None } else { Some(0) });
+            }
+            WsResponse::Genres { genres } => {
+                self.genres = genres;
+                self.library_list
+                    .borrow_mut()
+                    .select(if self.genres.is_empty() { None } else { Some(0) });
+            }
+            WsResponse::GenreTracks { tracks } => {
+                let empty = tracks.is_empty();
+                self.genre_tracks = tracks;
                 let mut list = self.library_list.borrow_mut();
                 list.select(if empty { None } else { Some(0) });
             }
@@ -164,9 +271,11 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Esc => {
-                if self.in_album_view {
-                    self.in_album_view = false;
+                if self.active_panel == Panel::Library && self.library_browse_view {
+                    self.library_browse_view = false;
                     self.album_tracks.clear();
+                    self.artist_tracks.clear();
+                    self.genre_tracks.clear();
                     self.library_list.borrow_mut().select(None);
                 } else if self.active_panel == Panel::Search {
                     self.search_query.clear();
@@ -276,6 +385,18 @@ impl App {
                 self.active_panel = Panel::Search;
                 self.in_search_input = true;
             }
+            KeyCode::Char('m') => {
+                if self.active_panel == Panel::Library && !self.library_browse_view {
+                    self.library_mode = self.library_mode.next();
+                    self.request_library_list();
+                }
+            }
+            KeyCode::Char('M') => {
+                if self.active_panel == Panel::Library && !self.library_browse_view {
+                    self.library_mode = self.library_mode.prev();
+                    self.request_library_list();
+                }
+            }
             _ => {}
         }
     }
@@ -290,11 +411,7 @@ impl App {
                 }
             }
             Panel::Library => {
-                let max = if self.in_album_view {
-                    self.album_tracks.len()
-                } else {
-                    self.albums.len()
-                };
+                let max = self.library_items();
                 let mut list = self.library_list.borrow_mut();
                 let cur = list.selected().unwrap_or(0);
                 if cur > 0 {
@@ -313,10 +430,10 @@ impl App {
         }
     }
 
-    fn select_next(&self, state: &PlaybackState) {
+    fn select_next(&self, _state: &PlaybackState) {
         match self.active_panel {
             Panel::Queue => {
-                let len = state.zone(&self.active_zone_id)
+                let len = _state.zone(&self.active_zone_id)
                     .map(|z| z.queue.len())
                     .unwrap_or(0);
                 let mut list = self.queue_list.borrow_mut();
@@ -326,11 +443,7 @@ impl App {
                 }
             }
             Panel::Library => {
-                let max = if self.in_album_view {
-                    self.album_tracks.len()
-                } else {
-                    self.albums.len()
-                };
+                let max = self.library_items();
                 let mut list = self.library_list.borrow_mut();
                 let cur = list.selected().unwrap_or(0);
                 if max > 0 && cur + 1 < max {
@@ -354,10 +467,10 @@ impl App {
 
         match self.active_panel {
             Panel::Library => {
-                if self.in_album_view {
+                if self.library_browse_view {
                     let idx = self.library_list.borrow().selected();
                     if let Some(i) = idx {
-                        if let Some(track) = self.album_tracks.get(i).cloned() {
+                        if let Some(track) = self.library_browse_tracks().get(i).cloned() {
                             let tx = self.ws_tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx
@@ -372,19 +485,50 @@ impl App {
                 } else {
                     let idx = self.library_list.borrow().selected();
                     if let Some(i) = idx {
-                        if let Some(album) = self.albums.get(i) {
-                            self.req_counter += 1;
-                            let req_id = self.req_counter;
-                            let album_id = album.id.clone();
-                            let tx = self.ws_tx.clone();
-                            self.in_album_view = true;
-                            self.library_list.borrow_mut().select(None);
-                            tokio::spawn(async move {
-                                let _ = tx.send(ClientMessage::Request {
-                                    req_id,
-                                    req: WsRequest::GetAlbumTracks { album_id },
-                                }).await;
-                            });
+                        self.req_counter += 1;
+                        let req_id = self.req_counter;
+                        let tx = self.ws_tx.clone();
+
+                        match self.library_mode {
+                            LibraryMode::Albums => {
+                                if let Some(album) = self.albums.get(i) {
+                                    let album_id = album.id.clone();
+                                    self.library_browse_view = true;
+                                    self.library_list.borrow_mut().select(None);
+                                    tokio::spawn(async move {
+                                        let _ = tx.send(ClientMessage::Request {
+                                            req_id,
+                                            req: WsRequest::GetAlbumTracks { album_id },
+                                        }).await;
+                                    });
+                                }
+                            }
+                            LibraryMode::Artists => {
+                                if let Some(artist) = self.artists.get(i) {
+                                    let artist = artist.clone();
+                                    self.library_browse_view = true;
+                                    self.library_list.borrow_mut().select(None);
+                                    tokio::spawn(async move {
+                                        let _ = tx.send(ClientMessage::Request {
+                                            req_id,
+                                            req: WsRequest::GetArtistTracks { artist },
+                                        }).await;
+                                    });
+                                }
+                            }
+                            LibraryMode::Genres => {
+                                if let Some(genre) = self.genres.get(i) {
+                                    let genre = genre.clone();
+                                    self.library_browse_view = true;
+                                    self.library_list.borrow_mut().select(None);
+                                    tokio::spawn(async move {
+                                        let _ = tx.send(ClientMessage::Request {
+                                            req_id,
+                                            req: WsRequest::GetGenreTracks { genre },
+                                        }).await;
+                                    });
+                                }
+                            }
                         }
                     }
                 }

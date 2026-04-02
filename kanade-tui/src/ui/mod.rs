@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{App, Panel};
+use crate::app::{App, LibraryMode, Panel};
 use kanade_core::state::PlaybackState;
 
 pub fn draw(f: &mut Frame, app: &App, state: &PlaybackState) {
@@ -110,11 +110,14 @@ fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let title: String;
     let items: Vec<ListItem>;
 
-    if app.in_album_view {
-        has_items = !app.album_tracks.is_empty();
-        title = "Tracks (Enter: add to queue, Esc: back)".to_string();
+    if app.library_browse_view {
+        has_items = !app.library_browse_tracks().is_empty();
+        title = format!(
+            "Tracks (Enter: add to queue, Esc: back) [{}]",
+            app.library_mode.label()
+        );
         items = app
-            .album_tracks
+            .library_browse_tracks()
             .iter()
             .map(|t| {
                 let name = t.title.as_deref().unwrap_or("(untitled)");
@@ -127,16 +130,38 @@ fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             })
             .collect();
     } else {
-        has_items = !app.albums.is_empty();
-        title = "Albums (Enter: open, Tab/BackTab: switch)".to_string();
-        items = app
-            .albums
-            .iter()
-            .map(|album| {
-                let t = album.title.as_deref().unwrap_or("(untitled album)");
-                ListItem::new(t.to_string())
-            })
-            .collect();
+        match app.library_mode {
+            LibraryMode::Albums => {
+                has_items = !app.albums.is_empty();
+                title = "Albums (Enter: open, m/M: switch mode, Esc: back)".to_string();
+                items = app
+                    .albums
+                    .iter()
+                    .map(|album| {
+                        let t = album.title.as_deref().unwrap_or("(untitled album)");
+                        ListItem::new(t.to_string())
+                    })
+                    .collect();
+            }
+            LibraryMode::Artists => {
+                has_items = !app.artists.is_empty();
+                title = "Artists (Enter: open, m/M: switch mode, Esc: back)".to_string();
+                items = app
+                    .artists
+                    .iter()
+                    .map(|a| ListItem::new(a.clone()))
+                    .collect();
+            }
+            LibraryMode::Genres => {
+                has_items = !app.genres.is_empty();
+                title = "Genres (Enter: open, m/M: switch mode, Esc: back)".to_string();
+                items = app
+                    .genres
+                    .iter()
+                    .map(|g| ListItem::new(g.clone()))
+                    .collect();
+            }
+        }
     }
 
     let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
@@ -230,7 +255,7 @@ fn render_help(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             "Space:play/pause  n:next  p:prev  s:stop  +/-:vol  Tab:switch  q:quit"
         }
         Panel::Queue => "↑/↓:navigate  Enter:play  Tab:switch  q:quit",
-        Panel::Library => "↑/↓:navigate  Enter:open/add  Esc:back  Tab:switch  q:quit",
+        Panel::Library => "↑/↓:navigate  Enter:open/add  m/M:mode  Esc:back  Tab:switch  q:quit",
         Panel::Search => {
             if app.in_search_input {
                 "type:search  Backspace:delete  Enter:finish  Esc:cancel  q:quit"
