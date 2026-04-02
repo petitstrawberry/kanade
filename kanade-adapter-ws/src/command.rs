@@ -71,6 +71,7 @@ pub enum WsRequest {
     GetArtistAlbums { artist: String },
     GetArtistTracks { artist: String },
     GetGenres,
+    GetGenreAlbums { genre: String },
     GetGenreTracks { genre: String },
     Search { query: String },
     GetQueue { zone_id: String },
@@ -108,6 +109,9 @@ pub enum WsResponse {
     },
     Genres {
         genres: Vec<String>,
+    },
+    GenreAlbums {
+        albums: Vec<Album>,
     },
     GenreTracks {
         tracks: Vec<Track>,

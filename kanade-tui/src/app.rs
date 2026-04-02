@@ -98,10 +98,12 @@ pub struct App {
     pub artist_albums: Vec<kanade_core::model::Album>,
     pub artist_tracks: Vec<kanade_core::model::Track>,
     pub genres: Vec<String>,
+    pub genre_albums: Vec<kanade_core::model::Album>,
     pub genre_tracks: Vec<kanade_core::model::Track>,
     pub library_mode: LibraryMode,
     pub library_level: u8,
     pub library_selected_artist: Option<String>,
+    pub library_selected_genre: Option<String>,
     pub active_zone_id: String,
     pub req_counter: u64,
     pub in_search_input: bool,
@@ -133,10 +135,12 @@ impl App {
             artist_albums: Vec::new(),
             artist_tracks: Vec::new(),
             genres: Vec::new(),
+            genre_albums: Vec::new(),
             genre_tracks: Vec::new(),
             library_mode: LibraryMode::Albums,
             library_level: 0,
             library_selected_artist: None,
+            library_selected_genre: None,
             active_zone_id: "default".to_string(),
             req_counter: 1,
             in_search_input: false,
@@ -163,7 +167,7 @@ impl App {
         match self.library_mode {
             LibraryMode::Albums => &[],
             LibraryMode::Artists => &self.artist_albums,
-            LibraryMode::Genres => &[],
+            LibraryMode::Genres => &self.genre_albums,
         }
     }
 
@@ -197,7 +201,9 @@ impl App {
             }
             LibraryMode::Genres => {
                 if self.library_level == 0 {
-                    self.library_enter_genre_tracks();
+                    self.library_enter_genre_albums();
+                } else if self.library_level == 1 {
+                    self.library_enter_genre_album_tracks();
                 }
             }
         }
@@ -212,11 +218,14 @@ impl App {
             self.artist_albums.clear();
             self.artist_tracks.clear();
             self.album_tracks.clear();
+            self.genre_albums.clear();
             self.genre_tracks.clear();
             self.library_selected_artist = None;
+            self.library_selected_genre = None;
             self.library_detail.borrow_mut().select(None);
-        } else if self.library_level == 1 && self.library_mode == LibraryMode::Artists {
+        } else if self.library_level == 1 && (self.library_mode == LibraryMode::Artists || self.library_mode == LibraryMode::Genres) {
             self.artist_tracks.clear();
+            self.genre_tracks.clear();
             self.library_detail.borrow_mut().select(None);
         }
     }
@@ -304,16 +313,61 @@ impl App {
         });
     }
 
-    fn library_enter_genre_tracks(&mut self) {
+    fn library_enter_genre_albums(&mut self) {
         let idx = self.library_list.borrow().selected();
         let Some(i) = idx else { return };
         let Some(genre) = self.genres.get(i) else { return };
 
+        let genre = genre.clone();
+        self.library_selected_genre = Some(genre.clone());
         self.req_counter += 1;
         let req_id = self.req_counter;
-        let genre = genre.clone();
         let tx = self.ws_tx.clone();
         self.library_level = 1;
+        self.library_detail.borrow_mut().select(None);
+        tokio::spawn(async move {
+            let _ = tx.send(ClientMessage::Request {
+                req_id,
+                req: WsRequest::GetGenreAlbums { genre },
+            }).await;
+        });
+    }
+
+    fn library_enter_genre_album_tracks(&mut self) {
+        let idx = self.library_detail.borrow().selected();
+        let Some(i) = idx else { return };
+        let genre = match self.library_selected_genre.as_ref() {
+            Some(g) => g.clone(),
+            None => return,
+        };
+
+        if i == 0 {
+            self.library_enter_genre_all_tracks(&genre);
+        } else {
+            let album_idx = i - 1;
+            if let Some(album) = self.genre_albums.get(album_idx) {
+                self.req_counter += 1;
+                let req_id = self.req_counter;
+                let album_id = album.id.clone();
+                let tx = self.ws_tx.clone();
+                self.library_level = 2;
+                self.library_detail.borrow_mut().select(None);
+                tokio::spawn(async move {
+                    let _ = tx.send(ClientMessage::Request {
+                        req_id,
+                        req: WsRequest::GetAlbumTracks { album_id },
+                    }).await;
+                });
+            }
+        }
+    }
+
+    fn library_enter_genre_all_tracks(&mut self, genre: &str) {
+        self.req_counter += 1;
+        let req_id = self.req_counter;
+        let genre = genre.to_string();
+        let tx = self.ws_tx.clone();
+        self.library_level = 2;
         self.library_detail.borrow_mut().select(None);
         tokio::spawn(async move {
             let _ = tx.send(ClientMessage::Request {
@@ -357,6 +411,11 @@ impl App {
                 self.library_list
                     .borrow_mut()
                     .select(if self.genres.is_empty() { None } else { Some(0) });
+            }
+            WsResponse::GenreAlbums { albums } => {
+                let empty = albums.is_empty();
+                self.genre_albums = albums;
+                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
             }
             WsResponse::GenreTracks { tracks } => {
                 let empty = tracks.is_empty();

@@ -172,12 +172,12 @@ fn render_library_master(f: &mut Frame, area: ratatui::layout::Rect, app: &App) 
 fn render_library_right(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
 
-    if app.library_mode == LibraryMode::Artists && app.library_level == 1 {
-        let mut items: Vec<ListItem> = vec![ListItem::new(Line::from(vec![
-            Span::styled("★ ", Style::default().fg(Color::Yellow)),
-            Span::raw("All albums"),
-        ]))];
-        for album in &app.artist_albums {
+    if (app.library_mode == LibraryMode::Artists || app.library_mode == LibraryMode::Genres)
+        && app.library_level == 1
+    {
+        let albums = app.library_detail_albums();
+        let mut items: Vec<ListItem> = vec![ListItem::new("All albums")];
+        for album in albums {
             let t = album.title.as_deref().unwrap_or("(untitled album)");
             items.push(ListItem::new(t.to_string()));
         }
@@ -192,7 +192,7 @@ fn render_library_right(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             .highlight_symbol("> ");
 
         let mut list_state = app.library_detail.borrow_mut();
-        if !app.artist_albums.is_empty() && list_state.selected().is_none() {
+        if !albums.is_empty() && list_state.selected().is_none() {
             list_state.select(Some(0));
         }
         f.render_stateful_widget(list, area, &mut list_state);

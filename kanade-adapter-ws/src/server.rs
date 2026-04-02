@@ -203,6 +203,14 @@ async fn handle_request(
             }).await.unwrap_or(None).unwrap_or_default();
             WsResponse::Genres { genres }
         }
+        WsRequest::GetGenreAlbums { genre } => {
+            let path = db_path.clone();
+            let albums = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_albums_by_genre(&genre).ok()
+            }).await.unwrap_or(None).unwrap_or_default();
+            WsResponse::GenreAlbums { albums }
+        }
         WsRequest::GetGenreTracks { genre } => {
             let path = db_path.clone();
             let tracks = tokio::task::spawn_blocking(move || {

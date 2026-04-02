@@ -15,6 +15,7 @@ pub struct MpdStateSync {
     broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
     host: String,
     port: u16,
+    last_song: Option<usize>,
 }
 
 impl MpdStateSync {
@@ -30,10 +31,11 @@ impl MpdStateSync {
             broadcasters,
             host: host.into(),
             port,
+            last_song: None,
         }
     }
 
-    pub async fn run(&self) {
+    pub async fn run(&mut self) {
         let mut backoff = Duration::from_secs(1);
         let max_backoff = Duration::from_secs(30);
 
@@ -49,7 +51,7 @@ impl MpdStateSync {
         }
     }
 
-    async fn sync_loop(&self) -> Result<(), String> {
+    async fn sync_loop(&mut self) -> Result<(), String> {
         let addr = format!("{}:{}", self.host, self.port);
         let stream = tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(&addr))
             .await
@@ -73,7 +75,7 @@ impl MpdStateSync {
     }
 
     async fn poll_status(
-        &self,
+        &mut self,
         reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
         writer: &mut tokio::net::tcp::OwnedWriteHalf,
     ) -> Result<(), String> {
@@ -126,7 +128,8 @@ impl MpdStateSync {
             zone.status = playback_status;
             zone.volume = volume;
             if let Some(song_idx) = song {
-                if zone.current_index != Some(song_idx) {
+                if self.last_song != Some(song_idx) {
+                    self.last_song = Some(song_idx);
                     zone.current_index = Some(song_idx);
                     zone.position_secs = 0.0;
                 }

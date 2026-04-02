@@ -387,6 +387,24 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn get_albums_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Album>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT DISTINCT a.id, a.dir_path, a.title
+               FROM albums a
+               JOIN tracks t ON t.album_id = a.id
+               WHERE t.genre = ?1
+               ORDER BY a.title, a.dir_path"#,
+        )?;
+        let rows = stmt.query_map(params![genre], |row| {
+            Ok(Album {
+                id: row.get(0)?,
+                dir_path: row.get(1)?,
+                title: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     // ------------------------------------------------------------------
     // Transaction helpers
     // ------------------------------------------------------------------

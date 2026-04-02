@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
 
     let core = Arc::new(core);
 
-    let mpd_sync = MpdStateSync::new(
+    let mut mpd_sync = MpdStateSync::new(
         mpd_host.clone(),
         mpd_port,
         MpdClient::new(mpd_host, mpd_port),
