@@ -5,20 +5,61 @@ use kanade_core::model::{Album, RepeatMode, Track};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum WsCommand {
-    Play { zone_id: String },
-    Pause { zone_id: String },
-    Stop { zone_id: String },
-    Next { zone_id: String },
-    Previous { zone_id: String },
-    Seek { zone_id: String, position_secs: f64 },
-    SetVolume { zone_id: String, volume: u8 },
-    SetRepeat { zone_id: String, repeat: RepeatMode },
-    SetShuffle { zone_id: String, shuffle: bool },
-    AddToQueue { zone_id: String, track: Track },
-    AddTracksToQueue { zone_id: String, tracks: Vec<Track> },
-    PlayIndex { zone_id: String, index: usize },
-    RemoveFromQueue { zone_id: String, index: usize },
-    ClearQueue { zone_id: String },
+    Play {
+        zone_id: String,
+    },
+    Pause {
+        zone_id: String,
+    },
+    Stop {
+        zone_id: String,
+    },
+    Next {
+        zone_id: String,
+    },
+    Previous {
+        zone_id: String,
+    },
+    Seek {
+        zone_id: String,
+        position_secs: f64,
+    },
+    SetVolume {
+        zone_id: String,
+        volume: u8,
+    },
+    SetRepeat {
+        zone_id: String,
+        repeat: RepeatMode,
+    },
+    SetShuffle {
+        zone_id: String,
+        shuffle: bool,
+    },
+    AddToQueue {
+        zone_id: String,
+        track: Track,
+    },
+    AddTracksToQueue {
+        zone_id: String,
+        tracks: Vec<Track>,
+    },
+    PlayIndex {
+        zone_id: String,
+        index: usize,
+    },
+    RemoveFromQueue {
+        zone_id: String,
+        index: usize,
+    },
+    MoveInQueue {
+        zone_id: String,
+        from: usize,
+        to: usize,
+    },
+    ClearQueue {
+        zone_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

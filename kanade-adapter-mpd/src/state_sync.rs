@@ -107,6 +107,13 @@ impl MpdStateSync {
             .get("elapsed")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
+        let song = map
+            .get("song")
+            .and_then(|s| s.parse::<usize>().ok());
+        let volume = map
+            .get("volume")
+            .and_then(|s| s.parse::<u8>().ok())
+            .unwrap_or(0);
         let playback_status = match map.get("state").map(String::as_str) {
             Some("play") => PlaybackStatus::Playing,
             Some("pause") => PlaybackStatus::Paused,
@@ -117,6 +124,13 @@ impl MpdStateSync {
         if let Some(zone) = state.zones.get_mut(0) {
             zone.position_secs = elapsed;
             zone.status = playback_status;
+            zone.volume = volume;
+            if let Some(song_idx) = song {
+                if zone.current_index != Some(song_idx) {
+                    zone.current_index = Some(song_idx);
+                    zone.position_secs = 0.0;
+                }
+            }
         }
         let snapshot = state.clone();
         drop(state);

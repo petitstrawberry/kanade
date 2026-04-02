@@ -141,6 +141,7 @@ async fn dispatch_command(cmd: WsCommand, core: &Core) {
         WsCommand::AddTracksToQueue { zone_id, tracks } => core.add_tracks_to_zone_queue(&zone_id, tracks).await,
         WsCommand::PlayIndex { zone_id, index } => core.play_zone_index(&zone_id, index).await,
         WsCommand::RemoveFromQueue { zone_id, index } => core.remove_from_zone_queue(&zone_id, index).await,
+        WsCommand::MoveInQueue { zone_id, from, to } => core.move_in_zone_queue(&zone_id, from, to).await,
         WsCommand::ClearQueue { zone_id } => core.clear_zone_queue(&zone_id).await,
     };
     if let Err(e) = result {

@@ -271,6 +271,38 @@ impl Core {
         Ok(())
     }
 
+    pub async fn move_in_zone_queue(
+        &self,
+        zone_id: &str,
+        from: usize,
+        to: usize,
+    ) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        if from >= zone.queue.len() || to >= zone.queue.len() {
+            return Err(CoreError::QueueIndexOutOfBounds);
+        }
+        let track = zone.queue.remove(from);
+        zone.queue.insert(to, track);
+        match zone.current_index {
+            Some(ci) if ci == from => {
+                zone.current_index = Some(to);
+            }
+            Some(ci) if from < ci && ci <= to => {
+                zone.current_index = Some(ci - 1);
+            }
+            Some(ci) if to <= ci && ci < from => {
+                zone.current_index = Some(ci + 1);
+            }
+            _ => {}
+        }
+        let queue = Self::build_queue_file_paths(zone);
+        drop(s);
+        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        self.broadcast().await;
+        Ok(())
+    }
+
     pub async fn play_zone_index(&self, zone_id: &str, index: usize) -> Result<(), CoreError> {
         let mut s = self.state.write().await;
         let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
