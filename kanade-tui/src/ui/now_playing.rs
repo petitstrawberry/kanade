@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use kanade_core::{
-    model::{PlaybackStatus, Zone},
+    model::{PlaybackStatus, RepeatMode, Zone},
     state::PlaybackState,
 };
 
@@ -17,10 +17,10 @@ pub fn draw(f: &mut Frame, area: Rect, state: &PlaybackState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
+            Constraint::Length(7), // track info
+            Constraint::Length(1), // progress
+            Constraint::Length(1), // status
+            Constraint::Min(0),    // details
         ])
         .split(area);
 
@@ -30,32 +30,61 @@ pub fn draw(f: &mut Frame, area: Rect, state: &PlaybackState) {
     render_details(f, chunks[3], zone);
 }
 
+fn dim(s: impl Into<String>) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(Color::DarkGray))
+}
+
 fn render_track_info(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
     let current = zone.and_then(|z| z.current_track());
 
-    let (title, artist, album) = current
+    let lines: Vec<Line<'static>> = current
         .map(|t| {
-            (
-                t.title.as_deref().unwrap_or("(no title)"),
-                t.artist.as_deref().unwrap_or("(no artist)"),
-                t.album_title.as_deref().unwrap_or(""),
-            )
+            let title = t.title.as_deref().unwrap_or("(no title)").to_string();
+            let artist = t.artist.as_deref().unwrap_or("(no artist)").to_string();
+            let album = t.album_title.as_deref().unwrap_or("").to_string();
+            let composer = t.composer.as_deref().map(|c| c.to_string());
+
+            let mut lines = vec![
+                Line::from(vec![Span::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(vec![
+                    Span::raw(artist),
+                    dim(" \u{2014} "),
+                    Span::styled(album, Style::default().fg(Color::DarkGray)),
+                ]),
+            ];
+
+            if let Some(c) = composer {
+                lines.push(Line::from(vec![dim(format!("Composer: {c}"))]));
+            }
+
+            if let Some(n) = t.track_number {
+                let dur = t
+                    .duration_secs
+                    .map(|d| format!("  |  {}", format_time(d)))
+                    .unwrap_or_default();
+                lines.push(Line::from(vec![dim(format!("Track {n}")), Span::raw(dur)]));
+            } else if let Some(d) = t.duration_secs {
+                lines.push(Line::from(vec![dim(format!(
+                    "Duration: {}",
+                    format_time(d)
+                ))]));
+            }
+
+            lines
         })
-        .unwrap_or(("(no track)", "(no artist)", ""));
+        .unwrap_or_else(|| {
+            vec![Line::from(Span::styled(
+                "(no track)",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        });
 
-    let title_line = Line::from(vec![Span::styled(
-        title,
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )]);
-    let artist_line = Line::from(vec![
-        Span::raw(artist),
-        Span::styled(" - ", Style::default().fg(Color::DarkGray)),
-        Span::styled(album, Style::default().fg(Color::DarkGray)),
-    ]);
-
-    let content = Paragraph::new(vec![title_line, artist_line]);
+    let content = Paragraph::new(lines);
     f.render_widget(content, area);
 }
 
@@ -74,7 +103,7 @@ fn render_progress(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
     };
     let ratio = ratio.clamp(0.0, 1.0);
 
-    let progress_text = format!("{} / {:.0}", format_time(position), duration);
+    let progress_text = format!("{} / {}", format_time(position), format_time(duration));
 
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
@@ -88,7 +117,7 @@ fn render_progress(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
 }
 
 fn render_status(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
-    let (status_str, volume, repeat_str) = zone
+    let (status_str, volume, repeat_str, shuffle_str) = zone
         .map(|z| {
             let s = match z.status {
                 PlaybackStatus::Playing => "> Playing",
@@ -97,20 +126,20 @@ fn render_status(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
                 PlaybackStatus::Loading => "~ Loading",
             };
             let r = match z.repeat {
-                kanade_core::model::RepeatMode::Off => "",
-                kanade_core::model::RepeatMode::One => " [Repeat One]",
-                kanade_core::model::RepeatMode::All => " [Repeat All]",
+                RepeatMode::Off => "",
+                RepeatMode::One => " [Repeat One]",
+                RepeatMode::All => " [Repeat All]",
             };
-            (s, z.volume, r)
+            let sh = if z.shuffle { " [Shuffle]" } else { "" };
+            (s, z.volume, r, sh)
         })
-        .unwrap_or(("[] Stopped", 0, ""));
-
-    let vol_text = format!("Vol: {}%", volume);
+        .unwrap_or(("[] Stopped", 0, "", ""));
 
     let line = Line::from(vec![
         Span::styled(status_str, Style::default().fg(Color::Green)),
         Span::raw("  "),
-        Span::styled(&vol_text, Style::default().fg(Color::DarkGray)),
+        dim(format!("Vol: {}%", volume)),
+        Span::styled(shuffle_str, Style::default().fg(Color::Magenta)),
         Span::styled(repeat_str, Style::default().fg(Color::Yellow)),
     ]);
 
@@ -119,25 +148,39 @@ fn render_status(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
 }
 
 fn render_details(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
-    let (format, sample_rate) = zone
-        .and_then(|z| {
-            let t = z.current_track()?;
-            Some((
-                t.format.as_deref().unwrap_or("-"),
-                t.sample_rate
-                    .map(|s| format!("{s} Hz"))
-                    .unwrap_or_else(|| "-".to_string()),
-            ))
-        })
-        .unwrap_or(("-", "-".to_string()));
+    let current = zone.and_then(|z| z.current_track());
 
-    let line = Line::from(vec![Span::raw(format!(" {}  |  {}", format, sample_rate))]);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+
+    // Technical info
+    if let Some(t) = current {
+        let fmt = t.format.as_deref().unwrap_or("-");
+        let sr = t
+            .sample_rate
+            .map(|s| format!("{s} Hz"))
+            .unwrap_or_else(|| "-".to_string());
+
+        spans.push(dim(format!(" {}  |  {}", fmt, sr)));
+    }
+
+    // Zone info
+    if let Some(z) = zone {
+        spans.push(dim(format!("  |  Zone: {}", z.name)));
+        spans.push(dim(format!(
+            "  |  Queue: {}/{}",
+            z.current_index.map(|i| i + 1).unwrap_or(0),
+            z.queue.len()
+        )));
+    }
+
+    let line = Line::from(spans);
     let content = Paragraph::new(line);
     f.render_widget(content, area);
 }
 
 fn format_time(secs: f64) -> String {
-    let mins = (secs as u64) / 60;
-    let secs = (secs as u64) % 60;
+    let total = secs as u64;
+    let mins = total / 60;
+    let secs = total % 60;
     format!("{mins}:{secs:02}")
 }
