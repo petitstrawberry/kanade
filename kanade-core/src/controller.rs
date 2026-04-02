@@ -177,6 +177,7 @@ impl Core {
     }
 
     pub async fn seek_zone(&self, zone_id: &str, position_secs: f64) -> Result<(), CoreError> {
+        for o in self.each_output(zone_id).await? { o.seek(position_secs).await?; }
         let mut s = self.state.write().await;
         let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
         zone.position_secs = position_secs;

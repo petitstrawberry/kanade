@@ -1,0 +1,74 @@
+:root {
+  /* Tokyo Night theme colors */
+  --bg-dark: #16161e;
+  --bg: #1a1b26;
+  --bg-highlight: #292e42;
+  --fg: #c0caf5;
+  --fg-dark: #a9b1d6;
+  --fg-gutter: #3b4261;
+  --comment: #565f89;
+  --accent: #7aa2f7;
+  --accent-hover: #8caaee;
+  --red: #f7768e;
+  --orange: #ff9e64;
+  --yellow: #e0af68;
+  --green: #9ece6a;
+  --purple: #bb9af7;
+  --cyan: #7dcfff;
+
+  --font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  height: 100vh;
+  user-select: none;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:focus {
+  outline: 2px solid var(--accent);
+}
+
+input {
+  font: inherit;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-highlight);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-gutter);
+}
