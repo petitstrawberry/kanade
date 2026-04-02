@@ -1,0 +1,15 @@
+[package]
+name = "kanade-adapter-openhome"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kanade-core = { path = "../kanade-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Minimal XML parsing — only the stdlib + this lightweight crate
+quick-xml = { version = "0.37", features = ["serialize"] }
