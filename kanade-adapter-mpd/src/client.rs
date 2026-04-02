@@ -33,8 +33,8 @@ impl MpdClient {
             TcpStream::connect(&addr),
         )
         .await
-        .map_err(|_| CoreError::Renderer(format!("timeout connecting to MPD at {addr}")))?
-        .map_err(|e| CoreError::Renderer(format!("cannot connect to MPD at {addr}: {e}")))?;
+        .map_err(|_| CoreError::Output(format!("timeout connecting to MPD at {addr}")))?
+        .map_err(|e| CoreError::Output(format!("cannot connect to MPD at {addr}: {e}")))?;
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -42,28 +42,28 @@ impl MpdClient {
         // Consume the MPD banner: "OK MPD <version>\n"
         let mut banner = String::new();
         reader.read_line(&mut banner).await.map_err(|e| {
-            CoreError::Renderer(format!("MPD banner read error: {e}"))
+            CoreError::Output(format!("MPD banner read error: {e}"))
         })?;
 
         // Send the command(s)
         writer
             .write_all(commands.as_bytes())
             .await
-            .map_err(|e| CoreError::Renderer(format!("MPD write error: {e}")))?;
+            .map_err(|e| CoreError::Output(format!("MPD write error: {e}")))?;
 
         // Collect response lines
         let mut lines = Vec::new();
         loop {
             let mut line = String::new();
             reader.read_line(&mut line).await.map_err(|e| {
-                CoreError::Renderer(format!("MPD read error: {e}"))
+                CoreError::Output(format!("MPD read error: {e}"))
             })?;
             let trimmed = line.trim_end().to_string();
             if trimmed == "OK" {
                 break;
             }
             if trimmed.starts_with("ACK") {
-                return Err(CoreError::Renderer(format!("MPD error: {trimmed}")));
+                return Err(CoreError::Output(format!("MPD error: {trimmed}")));
             }
             lines.push(trimmed);
         }

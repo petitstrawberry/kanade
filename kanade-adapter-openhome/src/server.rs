@@ -6,7 +6,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, instrument, warn};
 
-use kanade_core::controller::CoreController;
+use kanade_core::controller::Core;
 
 use crate::{
     broadcaster::OpenHomeBroadcaster,
@@ -15,39 +15,34 @@ use crate::{
 
 const TRANSPORT_SERVICE: &str = "urn:av-openhome-org:service:Transport:1";
 
-/// Minimal HTTP/1.1 server that handles UPnP SOAP control requests.
-///
-/// Only `POST /Transport/control` and `POST /Volume/control` are handled.
-/// Everything else returns 404.
 pub struct OpenHomeServer {
-    controller: Arc<CoreController>,
+    core: Arc<Core>,
     broadcaster: Arc<OpenHomeBroadcaster>,
     addr: SocketAddr,
 }
 
 impl OpenHomeServer {
     pub fn new(
-        controller: Arc<CoreController>,
+        core: Arc<Core>,
         broadcaster: Arc<OpenHomeBroadcaster>,
         addr: SocketAddr,
     ) -> Self {
-        Self { controller, broadcaster, addr }
+        Self { core, broadcaster, addr }
     }
 
-    /// Start listening.  Runs indefinitely — spawn as a Tokio task.
     pub async fn run(self) {
         let listener = TcpListener::bind(self.addr)
             .await
             .expect("OpenHomeServer: failed to bind");
         info!("OpenHome HTTP server listening on {}", self.addr);
 
-        let controller = self.controller;
+        let core = self.core;
         let broadcaster = self.broadcaster;
 
         loop {
             match listener.accept().await {
                 Ok((stream, peer)) => {
-                    let ctrl = Arc::clone(&controller);
+                    let ctrl = Arc::clone(&core);
                     let bc = Arc::clone(&broadcaster);
                     tokio::spawn(handle_request(stream, peer, ctrl, bc));
                 }
@@ -59,17 +54,16 @@ impl OpenHomeServer {
     }
 }
 
-#[instrument(skip(stream, controller, _broadcaster))]
+#[instrument(skip(stream, core, _broadcaster))]
 async fn handle_request(
     stream: TcpStream,
     peer: SocketAddr,
-    controller: Arc<CoreController>,
+    core: Arc<Core>,
     _broadcaster: Arc<OpenHomeBroadcaster>,
 ) {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
-    // --- Read request line ---
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).await.is_err() {
         return;
@@ -79,9 +73,7 @@ async fn handle_request(
         return;
     }
     let method = parts[0];
-    let _path = parts[1];
 
-    // --- Read headers ---
     let mut soap_action = String::new();
     let mut content_length: usize = 0;
     loop {
@@ -107,7 +99,6 @@ async fn handle_request(
         return;
     }
 
-    // --- Read body ---
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         use tokio::io::AsyncReadExt;
@@ -119,11 +110,10 @@ async fn handle_request(
 
     debug!("OpenHome SOAP action from {peer}: {soap_action}");
 
-    // --- Dispatch ---
     let response_body = match parse_action(&body_str, &soap_action) {
         Ok(action) => {
             let action_name = action_name_str(&action);
-            let result = dispatch(action, &controller).await;
+            let result = dispatch(action, &core).await;
             match result {
                 Ok(()) => ok_response(action_name, TRANSPORT_SERVICE),
                 Err(e) => fault_response(501, &e.to_string()),
@@ -155,18 +145,20 @@ fn action_name_str(action: &SoapAction) -> &'static str {
 
 async fn dispatch(
     action: SoapAction,
-    controller: &CoreController,
+    core: &Core,
 ) -> Result<(), kanade_core::error::CoreError> {
     match action {
-        SoapAction::Play => controller.play().await,
-        SoapAction::Pause => controller.pause().await,
-        SoapAction::Stop => controller.stop().await,
-        SoapAction::Next => controller.next().await,
-        SoapAction::Previous => controller.previous().await,
+        SoapAction::Play => core.play_zone("default").await,
+        SoapAction::Pause => core.pause_zone("default").await,
+        SoapAction::Stop => core.stop_zone("default").await,
+        SoapAction::Next => core.next_zone("default").await,
+        SoapAction::Previous => core.previous_zone("default").await,
         SoapAction::SeekSecondAbsolute { seconds } => {
-            controller.seek(seconds as f64).await
+            core.seek_zone("default", seconds as f64).await
         }
-        SoapAction::SetVolume { volume } => controller.set_volume(volume).await,
+        SoapAction::SetVolume { volume } => {
+            core.set_zone_volume("default", volume).await
+        }
         SoapAction::Unknown(name) => {
             warn!("OpenHome: unhandled action: {name}");
             Ok(())

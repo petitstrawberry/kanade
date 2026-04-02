@@ -11,6 +11,9 @@ use rusqlite::{Connection, Result};
 /// - `artists.id` is SHA-256 of the exact artist tag string.
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
+/// Schema version. Increment when adding columns or tables.
+pub const SCHEMA_VERSION: i32 = 1;
+
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -39,6 +42,8 @@ CREATE TABLE IF NOT EXISTS albums (
 -- tracks
 -- Primary key: file_path (the single source of truth).
 -- id is SHA-256(file_path) for stable cross-reference.
+-- mtime is the file modification timestamp (Unix epoch seconds) used
+-- for incremental scanning.
 -- -------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS tracks (
     file_path     TEXT NOT NULL PRIMARY KEY,
@@ -51,11 +56,13 @@ CREATE TABLE IF NOT EXISTS tracks (
     sample_rate   INTEGER,
     artist        TEXT,
     album_title   TEXT,
-    composer      TEXT
+    composer      TEXT,
+    mtime         INTEGER                 -- file modification time (epoch secs)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_album_id ON tracks (album_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_artist   ON tracks (artist);
+CREATE INDEX IF NOT EXISTS idx_tracks_mtime    ON tracks (mtime);
 
 -- -------------------------------------------------------------------
 -- FTS5 full-text search
@@ -91,7 +98,40 @@ AFTER UPDATE ON tracks BEGIN
 END;
 "#;
 
-/// Apply the schema DDL to an open connection.
+/// Migrations keyed by schema version.
+/// Each migration is idempotent (safe to re-run).
+static MIGRATIONS: &[(&str, &str)] = &[(
+    "1",
+    r#"
+        -- v1: add mtime column for incremental scanning
+        -- Safe to re-run: will fail silently if column already exists.
+        -- (We catch the error in apply_migrations.)
+        ALTER TABLE tracks ADD COLUMN mtime INTEGER;
+    "#,
+)];
+
+/// Apply the base schema DDL to an open connection.
 pub fn apply(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA_SQL)
+    conn.execute_batch(SCHEMA_SQL)?;
+    apply_migrations(conn)
+}
+
+/// Run any pending migrations based on `user_version`.
+fn apply_migrations(conn: &Connection) -> Result<()> {
+    let current: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+    for &(version, sql) in MIGRATIONS {
+        let v: i32 = version.parse().unwrap();
+        if v <= current {
+            continue;
+        }
+        // ALTER TABLE ADD COLUMN fails if column exists — that's fine.
+        if let Err(e) = conn.execute_batch(sql) {
+            tracing::debug!("migration v{version} skipped (may already be applied): {e}");
+        }
+        conn.pragma_update(None, "user_version", v)?;
+        tracing::info!("applied schema migration v{version}");
+    }
+
+    Ok(())
 }

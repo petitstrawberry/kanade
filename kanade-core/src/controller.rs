@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -5,229 +6,317 @@ use tracing::instrument;
 
 use crate::{
     error::CoreError,
-    model::Track,
-    ports::{AudioRenderer, EventBroadcaster},
-    state::{PlaybackState, PlaybackStatus, QueueEntry},
+    model::{PlaybackStatus, RepeatMode, Track, Zone},
+    ports::{AudioOutput, EventBroadcaster},
+    state::PlaybackState,
 };
 
-/// The central controller — the "brain" of Kanade.
-///
-/// All input adapters (WebSocket, OpenHome, …) call methods on this struct.
-/// It mutates the shared [`PlaybackState`], delegates rendering to the
-/// registered [`AudioRenderer`], and broadcasts the new state to every
-/// registered [`EventBroadcaster`].
-pub struct CoreController {
+pub struct Core {
     state: Arc<RwLock<PlaybackState>>,
-    renderer: Arc<dyn AudioRenderer>,
+    outputs: HashMap<String, Arc<dyn AudioOutput>>,
     broadcasters: Vec<Arc<dyn EventBroadcaster>>,
 }
 
-impl CoreController {
-    /// Create a new controller.
-    ///
-    /// `renderer` — the single audio output adapter.
-    /// `broadcasters` — all input adapters that need state-change notifications.
+impl Core {
     pub fn new(
-        renderer: Arc<dyn AudioRenderer>,
+        outputs: Vec<(String, Arc<dyn AudioOutput>)>,
         broadcasters: Vec<Arc<dyn EventBroadcaster>>,
     ) -> Self {
         Self {
-            state: Arc::new(RwLock::new(PlaybackState::default())),
-            renderer,
+            state: Arc::new(RwLock::new(PlaybackState { zones: Vec::new() })),
+            outputs: outputs.into_iter().collect(),
             broadcasters,
         }
     }
 
-    /// Returns a clone of the `Arc<RwLock<PlaybackState>>` so adapters can
-    /// read the current state without going through the controller.
+    pub fn add_output(&mut self, id: String, output: Arc<dyn AudioOutput>) {
+        self.outputs.insert(id, output);
+    }
+
+    pub fn add_broadcaster(&mut self, b: Arc<dyn EventBroadcaster>) {
+        self.broadcasters.push(b);
+    }
+
     pub fn state_handle(&self) -> Arc<RwLock<PlaybackState>> {
         Arc::clone(&self.state)
     }
 
-    // ------------------------------------------------------------------
-    // Playback commands
-    // ------------------------------------------------------------------
-
-    /// Start or resume playback.
-    #[instrument(skip(self))]
-    pub async fn play(&self) -> Result<(), CoreError> {
-        self.renderer.execute_play().await?;
-        {
-            let mut s = self.state.write().await;
-            s.status = PlaybackStatus::Playing;
-        }
-        self.broadcast().await;
-        Ok(())
+    pub async fn add_zone(&self, zone: Zone) {
+        self.state.write().await.zones.push(zone);
     }
 
-    /// Pause playback.
-    #[instrument(skip(self))]
-    pub async fn pause(&self) -> Result<(), CoreError> {
-        self.renderer.execute_pause().await?;
-        {
-            let mut s = self.state.write().await;
-            s.status = PlaybackStatus::Paused;
-        }
-        self.broadcast().await;
-        Ok(())
+    pub async fn get_zone(&self, id: &str) -> Option<Zone> {
+        self.state.read().await.zone(id).cloned()
     }
 
-    /// Stop playback.
-    #[instrument(skip(self))]
-    pub async fn stop(&self) -> Result<(), CoreError> {
-        self.renderer.execute_stop().await?;
-        {
-            let mut s = self.state.write().await;
-            s.status = PlaybackStatus::Stopped;
-            s.position_secs = 0.0;
-        }
-        self.broadcast().await;
-        Ok(())
-    }
-
-    /// Skip to the next track.
-    #[instrument(skip(self))]
-    pub async fn next(&self) -> Result<(), CoreError> {
-        {
-            let mut s = self.state.write().await;
-            let queue_len = s.queue.len();
-            if queue_len == 0 {
-                return Err(CoreError::QueueEmpty);
+    async fn each_output(&self, zone_id: &str) -> Result<Vec<Arc<dyn AudioOutput>>, CoreError> {
+        let s = self.state.read().await;
+        let zone = s.zone(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        let ids = zone.output_ids.clone();
+        drop(s);
+        let mut outs = Vec::new();
+        for id in &ids {
+            if let Some(o) = self.outputs.get(id) {
+                outs.push(Arc::clone(o));
             }
-            let next_index = match s.current_index {
-                Some(i) => {
-                    if s.repeat {
-                        (i + 1) % queue_len
-                    } else if i + 1 < queue_len {
-                        i + 1
-                    } else {
-                        s.status = PlaybackStatus::Stopped;
-                        s.current_index = None;
-                        self.renderer.execute_stop().await?;
-                        drop(s);
-                        self.broadcast().await;
-                        return Ok(());
-                    }
-                }
-                None => 0,
-            };
-            s.current_index = Some(next_index);
-            s.position_secs = 0.0;
         }
-        self.renderer.execute_next().await?;
-        self.broadcast().await;
-        Ok(())
+        Ok(outs)
     }
 
-    /// Go back to the previous track.
     #[instrument(skip(self))]
-    pub async fn previous(&self) -> Result<(), CoreError> {
-        {
-            let mut s = self.state.write().await;
-            let queue_len = s.queue.len();
-            if queue_len == 0 {
-                return Err(CoreError::QueueEmpty);
+    pub async fn play_zone(&self, zone_id: &str) -> Result<(), CoreError> {
+        for o in self.each_output(zone_id).await? { o.play().await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            if !zone.queue.is_empty() && zone.current_index.is_none() {
+                zone.current_index = Some(0);
             }
-            let prev_index = match s.current_index {
-                Some(0) | None => {
-                    if s.repeat {
-                        queue_len - 1
-                    } else {
-                        0
-                    }
+            if zone.current_index.is_some() {
+                zone.status = PlaybackStatus::Playing;
+            }
+        }
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn pause_zone(&self, zone_id: &str) -> Result<(), CoreError> {
+        for o in self.each_output(zone_id).await? { o.pause().await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.status = PlaybackStatus::Paused;
+        }
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn stop_zone(&self, zone_id: &str) -> Result<(), CoreError> {
+        for o in self.each_output(zone_id).await? { o.stop().await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.status = PlaybackStatus::Stopped;
+            zone.position_secs = 0.0;
+        }
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn next_zone(&self, zone_id: &str) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        if zone.queue.is_empty() {
+            return Err(CoreError::QueueEmpty);
+        }
+        let next = match zone.current_index {
+            Some(i) => match zone.repeat {
+                RepeatMode::Off => {
+                    if i + 1 < zone.queue.len() { i + 1 } else { return Err(CoreError::QueueEmpty) }
                 }
-                Some(i) => i - 1,
-            };
-            s.current_index = Some(prev_index);
-            s.position_secs = 0.0;
-        }
-        self.renderer.execute_previous().await?;
+                RepeatMode::One => i,
+                RepeatMode::All => (i + 1) % zone.queue.len(),
+            },
+            None => 0,
+        };
+        zone.current_index = Some(next);
+        zone.position_secs = 0.0;
+        zone.status = PlaybackStatus::Playing;
+        let queue = Self::build_queue_file_paths(zone);
+        drop(s);
+        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
         self.broadcast().await;
         Ok(())
     }
 
-    /// Seek to a position (in seconds) within the current track.
-    #[instrument(skip(self))]
-    pub async fn seek(&self, position_secs: f64) -> Result<(), CoreError> {
-        self.renderer.execute_seek(position_secs).await?;
-        {
-            let mut s = self.state.write().await;
-            s.position_secs = position_secs;
+    pub async fn previous_zone(&self, zone_id: &str) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        if zone.queue.is_empty() {
+            return Err(CoreError::QueueEmpty);
         }
+        let prev = match zone.current_index {
+            Some(0) | None => match zone.repeat {
+                RepeatMode::Off => return Err(CoreError::QueueEmpty),
+                RepeatMode::One => 0,
+                RepeatMode::All => zone.queue.len() - 1,
+            },
+            Some(i) => i - 1,
+        };
+        zone.current_index = Some(prev);
+        zone.position_secs = 0.0;
+        zone.status = PlaybackStatus::Playing;
+        let queue = Self::build_queue_file_paths(zone);
+        drop(s);
+        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
         self.broadcast().await;
         Ok(())
     }
 
-    /// Set the playback volume (0–100).
-    #[instrument(skip(self))]
-    pub async fn set_volume(&self, volume: u8) -> Result<(), CoreError> {
+    pub async fn seek_zone(&self, zone_id: &str, position_secs: f64) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        zone.position_secs = position_secs;
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn set_zone_volume(&self, zone_id: &str, volume: u8) -> Result<(), CoreError> {
         if volume > 100 {
             return Err(CoreError::InvalidVolume);
         }
-        self.renderer.execute_set_volume(volume).await?;
-        {
-            let mut s = self.state.write().await;
-            s.volume = volume;
+        for o in self.each_output(zone_id).await? { o.set_volume(volume).await?; }
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.volume = volume;
         }
+        drop(s);
         self.broadcast().await;
         Ok(())
     }
 
-    /// Replace the current queue with a new list of tracks and optionally
-    /// start playing from the given index.
-    #[instrument(skip(self, tracks))]
-    pub async fn set_queue(
+    pub async fn set_zone_shuffle(&self, zone_id: &str, shuffle: bool) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.shuffle = shuffle;
+        }
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn set_zone_repeat(&self, zone_id: &str, repeat: RepeatMode) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.repeat = repeat;
+        }
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn add_to_zone_queue(&self, zone_id: &str, track: Track) -> Result<(), CoreError> {
+        let file_paths = vec![track.file_path.clone()];
+        for o in self.each_output(zone_id).await? { o.add(&file_paths).await?; }
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        zone.queue.push(track);
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn add_tracks_to_zone_queue(&self, zone_id: &str, tracks: Vec<Track>) -> Result<(), CoreError> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        let file_paths: Vec<String> = tracks.iter().map(|t| t.file_path.clone()).collect();
+        for o in self.each_output(zone_id).await? { o.add(&file_paths).await?; }
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        zone.queue.extend(tracks);
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn clear_zone_queue(&self, zone_id: &str) -> Result<(), CoreError> {
+        for o in self.each_output(zone_id).await? { o.set_queue(&[]).await?; }
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        zone.queue.clear();
+        zone.current_index = None;
+        zone.position_secs = 0.0;
+        zone.status = PlaybackStatus::Stopped;
+        drop(s);
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn remove_from_zone_queue(&self, zone_id: &str, index: usize) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        if index >= zone.queue.len() {
+            return Err(CoreError::QueueIndexOutOfBounds);
+        }
+        zone.queue.remove(index);
+        match zone.current_index {
+            Some(ci) if ci == index && zone.queue.is_empty() => {
+                zone.current_index = None;
+                zone.status = PlaybackStatus::Stopped;
+            }
+            Some(ci) if ci == index => {
+                zone.current_index = Some(ci.min(zone.queue.len() - 1));
+            }
+            Some(ci) if ci > index => {
+                zone.current_index = Some(ci - 1);
+            }
+            _ => {}
+        }
+        let queue = Self::build_queue_file_paths(zone);
+        drop(s);
+        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn play_zone_index(&self, zone_id: &str, index: usize) -> Result<(), CoreError> {
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        if index >= zone.queue.len() {
+            return Err(CoreError::QueueIndexOutOfBounds);
+        }
+        zone.current_index = Some(index);
+        zone.position_secs = 0.0;
+        zone.status = PlaybackStatus::Playing;
+        let queue = Self::build_queue_file_paths(zone);
+        drop(s);
+        for o in self.each_output(zone_id).await? { o.play().await?; }
+        for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn set_zone_queue(
         &self,
+        zone_id: &str,
         tracks: Vec<Track>,
         start_index: Option<usize>,
     ) -> Result<(), CoreError> {
         let file_paths: Vec<String> = tracks.iter().map(|t| t.file_path.clone()).collect();
-        self.renderer.execute_set_queue(&file_paths).await?;
-        {
-            let mut s = self.state.write().await;
-            s.queue = tracks
-                .into_iter()
-                .enumerate()
-                .map(|(index, track)| QueueEntry { index, track })
-                .collect();
-            s.current_index = start_index;
-            s.position_secs = 0.0;
-            s.status = if start_index.is_some() {
-                PlaybackStatus::Playing
-            } else {
-                PlaybackStatus::Stopped
-            };
-        }
+        for o in self.each_output(zone_id).await? { o.set_queue(&file_paths).await?; }
+        let mut s = self.state.write().await;
+        let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
+        zone.queue = tracks;
+        zone.current_index = start_index;
+        zone.position_secs = 0.0;
+        zone.status = if start_index.is_some() {
+            PlaybackStatus::Playing
+        } else {
+            PlaybackStatus::Stopped
+        };
+        drop(s);
         if start_index.is_some() {
-            self.renderer.execute_play().await?;
+            for o in self.each_output(zone_id).await? { o.play().await?; }
         }
         self.broadcast().await;
         Ok(())
     }
 
-    /// Enable or disable repeat mode.
-    pub async fn set_repeat(&self, repeat: bool) -> Result<(), CoreError> {
-        let mut s = self.state.write().await;
-        s.repeat = repeat;
-        drop(s);
-        self.broadcast().await;
-        Ok(())
+    fn build_queue_file_paths(zone: &Zone) -> Vec<String> {
+        let start = zone.current_index.unwrap_or(0);
+        let tail = if zone.current_index.is_some() {
+            zone.queue.iter().skip(start + 1).map(|t| t.file_path.clone()).collect::<Vec<_>>()
+        } else {
+            zone.queue.iter().skip(1).map(|t| t.file_path.clone()).collect::<Vec<_>>()
+        };
+        let head = zone.queue.get(start).map(|t| vec![t.file_path.clone()]).unwrap_or_default();
+        let mut paths = head;
+        paths.extend(tail);
+        paths
     }
 
-    /// Enable or disable shuffle mode.
-    pub async fn set_shuffle(&self, shuffle: bool) -> Result<(), CoreError> {
-        let mut s = self.state.write().await;
-        s.shuffle = shuffle;
-        drop(s);
-        self.broadcast().await;
-        Ok(())
-    }
-
-    // ------------------------------------------------------------------
-    // Internal helpers
-    // ------------------------------------------------------------------
-
-    /// Snapshot the current state and push it to every broadcaster.
     async fn broadcast(&self) {
         let snapshot = self.state.read().await.clone();
         for b in &self.broadcasters {

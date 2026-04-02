@@ -73,6 +73,7 @@ cargo run
 | `OH_ADDR`            | `0.0.0.0:8090` | OpenHome HTTP server bind address |
 | `MUSIC_DIR`          | -              | Root music directory for scanning |
 | `DB_PATH`            | `kanade.db`    | SQLite database file path         |
+| `SCAN_INTERVAL_SECS` | `300`          | Interval between periodic scans   |
 | `RUST_LOG`           | `kanade=info`  | Log level (tracing filter)        |
 
 ### Nix Dev Shell
@@ -94,10 +95,12 @@ cargo run
 
 | Crate                     | Role                                          |
 | ------------------------- | --------------------------------------------- |
-| `kanade`                  | Binary entrypoint; wires all adapters         |
+| `kanade`                  | Headless server binary; wires all adapters    |
+| `kanade-tui`              | TUI binary; server + terminal UI              |
 | `kanade-core`             | Domain models, state, port traits, controller |
 | `kanade-db`               | SQLite persistence, FTS5 search               |
-| `kanade-adapter-mpd`      | MPD output adapter (AudioRenderer)            |
+| `kanade-scanner`          | Library scanner (lofty + dsf-meta)           |
+| `kanade-adapter-mpd`      | MPD output + state sync (AudioRenderer)       |
 | `kanade-adapter-ws`       | WebSocket input + broadcast adapter           |
 | `kanade-adapter-openhome` | OpenHome/UPnP input adapter                   |
 

@@ -2,11 +2,17 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
-    #[error("renderer error: {0}")]
-    Renderer(String),
+    #[error("output error: {0}")]
+    Output(String),
+
+    #[error("zone not found")]
+    ZoneNotFound,
 
     #[error("queue is empty")]
     QueueEmpty,
+
+    #[error("queue index out of bounds")]
+    QueueIndexOutOfBounds,
 
     #[error("track not found: {0}")]
     TrackNotFound(String),

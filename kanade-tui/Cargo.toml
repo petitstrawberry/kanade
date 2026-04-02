@@ -1,16 +1,22 @@
 [package]
-name = "kanade-adapter-ws"
+name = "kanade-tui"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "kanade-tui"
+path = "src/main.rs"
+
 [dependencies]
 kanade-core = { path = "../kanade-core" }
-kanade-db = { path = "../kanade-db" }
+kanade-adapter-ws = { path = "../kanade-adapter-ws" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-async-trait = { workspace = true }
-thiserror = { workspace = true }
+anyhow = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"

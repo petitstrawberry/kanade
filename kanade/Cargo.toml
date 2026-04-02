@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 kanade-core = { path = "../kanade-core" }
 kanade-db = { path = "../kanade-db" }
+kanade-scanner = { path = "../kanade-scanner" }
 kanade-adapter-mpd = { path = "../kanade-adapter-mpd" }
 kanade-adapter-ws = { path = "../kanade-adapter-ws" }
 kanade-adapter-openhome = { path = "../kanade-adapter-openhome" }

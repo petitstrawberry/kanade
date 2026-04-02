@@ -40,10 +40,17 @@
         buildInputs = with pkgs; [
           openssl
         ];
+
+        # Runtime tools
+        packages = with pkgs; [
+          mpd
+          mpc
+          tmux
+        ];
       in
       {
         devShells.default = pkgs.mkShell {
-          inherit buildInputs nativeBuildInputs;
+          inherit buildInputs nativeBuildInputs packages;
 
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
 

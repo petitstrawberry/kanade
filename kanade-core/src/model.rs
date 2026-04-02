@@ -1,42 +1,65 @@
 use serde::{Deserialize, Serialize};
 
-/// A single audio track loaded from its file tags.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Track {
-    /// Canonical identifier: SHA-256 of the absolute file path (hex string).
     pub id: String,
-    /// Absolute path to the audio file.
     pub file_path: String,
     pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album_title: Option<String>,
+    pub composer: Option<String>,
     pub track_number: Option<u32>,
-    /// Duration in seconds.
     pub duration_secs: Option<f64>,
-    /// Audio format / codec (e.g. "FLAC", "MP3", "AAC").
     pub format: Option<String>,
     pub sample_rate: Option<u32>,
-    /// Artist tag exactly as stored in the file.
-    pub artist: Option<String>,
-    /// Album title tag exactly as stored in the file.
-    pub album_title: Option<String>,
-    /// Composer tag exactly as stored in the file.
-    pub composer: Option<String>,
 }
 
-/// An album derived deterministically from a directory path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Album {
-    /// SHA-256 of the album directory path (hex string).
     pub id: String,
-    /// Absolute path to the directory that contains the tracks.
     pub dir_path: String,
-    /// Album title (taken from the first track's tag, or directory name).
     pub title: Option<String>,
 }
 
-/// An artist derived from an exact tag string match.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Artist {
-    /// SHA-256 of the exact artist name string (hex string).
     pub id: String,
     pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatMode {
+    Off,
+    One,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackStatus {
+    Stopped,
+    Playing,
+    Paused,
+    Loading,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Zone {
+    pub id: String,
+    pub name: String,
+    pub output_ids: Vec<String>,
+    pub queue: Vec<Track>,
+    pub current_index: Option<usize>,
+    pub status: PlaybackStatus,
+    pub position_secs: f64,
+    pub volume: u8,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+}
+
+impl Zone {
+    pub fn current_track(&self) -> Option<&Track> {
+        self.current_index.and_then(|i| self.queue.get(i))
+    }
 }

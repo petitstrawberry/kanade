@@ -1,268 +1,290 @@
 # Kanade — Design Document
 
-## 1. Design Goals
-
-1. **Single-process, multi-client** — one binary runs the server, TUI, and all adapters
-2. **Hexagonal architecture** — core domain never depends on I/O adapters
-3. **Deterministic IDs** — SHA-256 hashes, no UUIDs, no auto-increment drift
-4. **Purist metadata** — file tags are the source of truth; no external APIs
-5. **Multi-frontend parity** — TUI, Web (React), and SwiftUI consume the same state model
-
-## 2. Workspace Layout
+## Architecture
 
 ```
-kanade/
-├── kanade-core/             Domain layer
-├── kanade-db/               SQLite persistence
-├── kanade-scanner/          Library scanner (NEW)
-├── kanade-adapter-mpd/      MPD output adapter
-├── kanade-adapter-ws/       WebSocket adapter
-├── kanade-adapter-openhome/ OpenHome adapter
-├── kanade-tui/              Terminal UI (NEW)
-└── kanade/                  Binary entrypoint
+┌─────────────────────────────────────────────────────┐
+│                  Kanade Server (daemon)                │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │                    Core                           │  │
+│  │  Zones, Queue, Playback State, Library        │  │
+│  └──────┬──────────────────────┬─────────────────┘  │
+│         │                      │                     │
+│  ┌──────▼──────────┐  ┌───────▼──────────┐         │
+│  │  kanade-db      │  │  kanade-scanner │         │
+│  │  SQLite + FTS5  │  │  bg scan loop   │         │
+│  └─────────────────┘  └────────────────┘         │
+│                                                     │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │  Outputs (per-zone, pluggable)                  │  │
+│  │  ┌──────────┐  ┌───────────┐  ┌──────────┐   │  │
+│  │  │ MPD      │  │ CoreAudio │  │ ALSA     │   │  │
+│  │  └──────────┘  └───────────┘  └──────────┘   │  │
+│  └─────────────────────────────────────────────────┘  │
+│                                                     │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │  kanade-adapter-ws     kanade-adapter-openhome   │ │
+│  │  WebSocket server      OpenHome/UPnP           │ │
+│  └──────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────┘
+         │
+         │  WebSocket (JSON)
+         │
+   ┌─────▼──────┐  ┌───────────┐  ┌──────────────┐
+   │ kanade-tui  │  │ Web (React)│  │ SwiftUI     │
+   │ (client)    │  │ (client)   │  │ (client)     │
+   └────────────┘  └───────────┘  └──────────────┘
 ```
 
-## 3. Module Design
+## Principles
 
-### 3.1 kanade-core (existing — no major changes)
+1. **Server is the single source of truth** — all state lives in the server. Clients are stateless renderers.
+2. **Clients and server have independent lifetimes** — start/stop/restart independently.
+3. **Outputs are pluggable** — MPD, CoreAudio, ALSA, PipeWire, etc. First target: MPD.
+4. **Zones from day one** — a Zone groups one or more Outputs and owns its own queue + playback state.
+5. **Hexagonal architecture** — core never depends on I/O adapters.
 
-Owns: `Track`, `Album`, `Artist`, `PlaybackState`, `CoreController`, port traits.
+## Core Concepts
 
-Port traits:
-- **`AudioRenderer`** — play, pause, stop, next, prev, seek, set_volume, set_queue
-- **`EventBroadcaster`** — `on_state_changed(&PlaybackState)`
+### Zone
 
-New additions:
-- Add `repeat_mode: RepeatMode` to `PlaybackState` (None, One, All) replacing the current `repeat: bool`
-- Add `shuffle_mode: bool` to `PlaybackState` (already exists)
+A Zone is a logical audio destination. Each zone has:
 
-### 3.2 kanade-db (existing — minor additions)
-
-Owns: SQLite schema, `Database` struct (sync, wrapped in `spawn_blocking`).
-
-Changes:
-- Add `get_all_tracks()` for library browsing
-- Add `get_all_albums()` for album listing
-- Add `get_album_by_dir()` helper
-- Add `purge_missing(file_paths: &[String])` to remove DB entries for deleted files
-
-### 3.3 kanade-scanner (NEW)
-
-**Responsibility**: Walk music directories, extract metadata, store in SQLite.
-
-Dependencies: `lofty`, `walkdir`, `kanade-core`, `kanade-db`
+- A name
+- One or more **Outputs** (physical devices that produce sound)
+- Its own **queue** (ordered list of tracks to play)
+- Its own **playback state** (Playing, Paused, Stopped, position)
+- Its own **volume**, **shuffle**, **repeat** settings
 
 ```
-kanade-scanner/
-├── src/
-│   ├── lib.rs
-│   ├── walker.rs      — recursive directory traversal
-│   ├── extractor.rs   — lofty-based tag + property extraction
-│   └── indexer.rs     — batch upsert into kanade-db
+Zone "Living Room"
+├── Outputs: [MPD (stereo receiver)]
+├── Queue: [Track A, Track B, Track C]
+├── State: Playing, position 1:23
+├── Volume: 72
+├── Shuffle: false
+└── Repeat: All
 ```
 
-Design:
-- `Scanner::new(db: Arc<Database>)`
-- `Scanner::scan_dir(path: &Path) -> Result<ScanResult>` — full scan of a directory
-- `Scanner::scan_incremental(path: &Path) -> Result<ScanResult>` — only new/modified files
-  - Compares file mtime against a `last_scanned_at` timestamp stored per-file in SQLite
-- Returns `ScanResult { added, updated, removed, elapsed }`
-- Runs via `tokio::task::spawn_blocking` (lofty + rusqlite are sync)
+When a zone plays, it sends audio to all its outputs simultaneously.
 
-Supported formats (via lofty): FLAC, MP3, AAC/M4A, OGG/Vorbis, Opus, WAV, AIFF, WMA, APE
+### Output
 
-Extraction per file:
-```
-lofty::Probe::open(path) → read()
-  → tag: title, artist, album, track_number, composer, genre
-  → properties: duration, sample_rate, channels, bit_depth, audio_bitrate
-  → file_type → format string ("FLAC", "MP3", etc.)
-```
+An Output is a physical audio endpoint. It is a dumb I/O adapter — it receives commands from the Core and makes sound come out of a device.
 
-### 3.4 kanade-adapter-mpd (existing — major additions)
-
-Current state: `MpdRenderer` implements `AudioRenderer` (output only — sends commands to MPD, never reads state back).
-
-**New: MPD state sync via idle loop**
-
-MPD supports the `idle` command: the client blocks until the subsystem changes,
-then the client reads the new state. This is the canonical way to sync.
-
-Add `MpdStateSync` — a background task that:
-1. Sends `idle` to MPD (blocks until player/playlist/mixer/etc changes)
-2. On wake: reads `status`, `currentsong`, `playlistinfo`
-3. Updates the shared `PlaybackState` accordingly
-4. Calls `broadcast()` to push new state to all frontends
-5. Loops back to step 1
-
-```
-MpdStateSync::new(client: MpdClient, state: Arc<RwLock<PlaybackState>>, broadcasters: [...])
-MpdStateSync::run() — spawns a tokio task that loops forever
+```rust
+#[async_trait]
+pub trait AudioOutput: Send + Sync {
+    async fn play(&self) -> Result<(), CoreError>;
+    async fn pause(&self) -> Result<(), CoreError>;
+    async fn stop(&self) -> Result<(), CoreError>;
+    async fn seek(&self, position_secs: f64) -> Result<(), CoreError>;
+    async fn set_volume(&self, volume: u8) -> Result<(), CoreError>;
+    async fn add(&self, file_paths: &[String]) -> Result<(), CoreError>;
+    async fn clear(&self) -> Result<(), CoreError>;
+    async fn set_queue(&self, file_paths: &[String]) -> Result<(), CoreError>;
+}
 ```
 
-MPD responses to parse:
-- `status` → state (play/pause/stop), song index, elapsed time, volume, repeat, random, consume, single
-- `currentsong` → file path, title, artist, album, duration
-- `playlistinfo` → ordered list of file paths (to rebuild queue)
+MPD is one implementation. CoreAudio/ALSA/etc. are future implementations. The Core does not care which backend is behind an Output.
 
-This makes PlaybackState a **reflection of MPD truth**, not an independent source.
-
-### 3.5 kanade-adapter-ws (existing — additions)
-
-Current: handles playback commands + broadcasts state changes.
-
-New commands to add:
-- `BrowseLibrary` — list albums or tracks by album
-- `SearchTracks` — FTS5 query, returns matching tracks
-- `ScanDir` — trigger a scan (async, result broadcast when done)
-
-Server → Client message types (unified):
-```json
-{"type": "state", "seq": 42, "payload": { ... PlaybackState ... }}
-{"type": "scan_progress", "seq": 43, "payload": {"added": 12, "scanned": 45}}
-{"type": "browse_result", "req_id": 7, "payload": [...albums...]}
-{"type": "search_result", "req_id": 8, "payload": [...tracks...]}
-```
-
-### 3.6 kanade-adapter-openhome (existing — no major changes)
-
-Works as-is for JPLAY and similar control points. May need volume service addition later.
-
-### 3.7 kanade-tui (NEW)
-
-**Responsibility**: Interactive terminal music player. Runs in-process, reads `PlaybackState` directly via `Arc<RwLock<>>`.
-
-Dependencies: `ratatui`, `crossterm`, `kanade-core`, `kanade-db`
-
-```
-kanade-tui/
-├── src/
-│   ├── lib.rs
-│   ├── app.rs          — App state machine (modes: browse, queue, search, now_playing)
-│   ├── ui/
-│   │   ├── mod.rs
-│   │   ├── now_playing.rs  — track info, progress bar, playback controls
-│   │   ├── queue.rs        — track queue with scroll
-│   │   ├── library.rs      — album/artist browser
-│   │   └── search.rs       — FTS search input + results
-│   └── input.rs        — key event handling
-```
-
-Layout (initial):
-```
-┌──────────────────────────────────────────────┐
-│ Now Playing: Track Title - Artist            │
-│ ▶ ████████░░░░░░░░░░░░░░ 01:23 / 04:56     │
-│                                              │
-│ Queue (3/12)                                 │
-│ ▸ 1. Track A - Artist A                     │
-│   2. Track B - Artist B                     │
-│   3. Track C - Artist C                     │
-│                                              │
-│ [1-9] jump  [n]ext [p]rev [space] play/pause│
-│ [s]earch [b]rowse [q]ueue [?] help          │
-└──────────────────────────────────────────────┘
-```
-
-Key bindings:
-- `Space` — play/pause
-- `n` / `p` — next/previous
-- `↑`/`↓` — navigate list
-- `Enter` — select/play item
-- `/` — search
-- `Tab` — cycle panels (now playing, queue, library, search)
-- `+`/`-` — volume
-- `s` — stop
-
-The TUI calls `CoreController` methods directly (in-process, no network round-trip).
-It reads `PlaybackState` via `Arc<RwLock<>>` for display updates at ~10 Hz tick rate.
-
-### 3.8 kanade (binary) — Wiring
-
-The binary entrypoint orchestrates everything:
+### Server (daemon)
 
 ```
 main()
-├── init tracing
 ├── open kanade-db
-├── create MpdRenderer + MpdStateSync
-├── create broadcasters (WsBroadcaster, OhBroadcaster)
-├── create CoreController
-├── create Scanner (Arc<Database>)
-├── spawn MpdStateSync::run()      — background task
-├── spawn WsServer::run()          — background task
-├── spawn OhServer::run()          — background task
-└── run kanade-tui (blocking)      — foreground
+├── create outputs from config (MPD instances, etc.)
+├── create zones from config (each zone → list of output IDs)
+├── create Core (zones + library + state)
+├── spawn scanner (background thread)
+├── spawn WS server
+└── spawn OH server
 ```
 
-The TUI is the foreground process. When the user quits the TUI, the entire
-binary exits (background tasks are cancelled via tokio runtime drop).
+The server runs forever. Clients come and go.
 
-## 4. Data Flow
+### Client (TUI, Web, etc.)
 
-### Playback flow
+A client:
+1. Connects to the server via WebSocket
+2. Sends commands (play, pause, browse library, add to queue, etc.)
+3. Receives state pushes (playback state, zone changes, scan progress)
+4. Renders UI
+
+A client holds NO persistent state. Everything comes from the server.
+
+## Workspace
+
 ```
-TUI keypress → CoreController.play() → MpdRenderer.execute_play() → MPD TCP
-                                                         ↓
-MPD state change → MpdStateSync reads idle → updates PlaybackState → broadcast
-                                                              ↓
-                                      TUI renders, WS pushes JSON, OH caches
+kanade/
+├── kanade-core/             Domain models, zone/output traits, Core
+├── kanade-db/               SQLite persistence, FTS5
+├── kanade-scanner/          Library scanner (lofty + dsf-meta)
+├── kanade-adapter-mpd/      MPD AudioOutput implementation
+├── kanade-adapter-ws/       WebSocket server (JSON protocol)
+├── kanade-adapter-openhome/ OpenHome/UPnP adapter
+├── kanade-tui/              TUI client (pure WS client + ratatui)
+└── kanade/                  Server binary entrypoint
 ```
 
-### Library scan flow
+## Models
+
+### Track
+
+```rust
+pub struct Track {
+    pub id: String,              // SHA-256(file_path)
+    pub file_path: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album_title: Option<String>,
+    pub composer: Option<String>,
+    pub track_number: Option<u32>,
+    pub duration_secs: Option<f64>,
+    pub format: Option<String>,  // "FLAC", "MP3", "DSD (DSD128)", etc.
+    pub sample_rate: Option<u32>,
+}
 ```
-TUI: / or Ctrl+S → trigger scan
-  → Scanner::scan_dir(MUSIC_DIR) [spawn_blocking]
-    → walkdir → lofty extract → Database::upsert_track (batch)
-    → ScanResult returned
-  → broadcast scan_progress to all frontends
+
+### Zone
+
+```rust
+pub struct Zone {
+    pub id: String,              // UUID
+    pub name: String,
+    pub outputs: Vec<String>,    // output IDs
+    pub queue: Vec<Track>,
+    pub current_index: Option<usize>,
+    pub status: PlaybackStatus,
+    pub position_secs: f64,
+    pub volume: u8,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+}
+
+pub enum RepeatMode { Off, One, All }
+pub enum PlaybackStatus { Stopped, Playing, Paused, Loading }
 ```
 
-## 5. Implementation Phases
+### Album / Artist
 
-### Phase 1: Scanner + DB integration
-- [ ] Create `kanade-scanner` crate
-- [ ] Implement walker (walkdir), extractor (lofty), indexer (batch upsert)
-- [ ] Wire `kanade-db` into main.rs
-- [ ] Add `get_all_albums()`, `get_album_tracks()`, `purge_missing()` to DB
-- [ ] Add scan command to TUI and WS
+```rust
+pub struct Album {
+    pub id: String,       // SHA-256(dir_path)
+    pub dir_path: String,
+    pub title: Option<String>,
+}
 
-### Phase 2: MPD state sync
-- [ ] Add `MpdStateSync` to `kanade-adapter-mpd`
-- [ ] Parse `status`, `currentsong`, `playlistinfo` responses
-- [ ] Sync PlaybackState from MPD on startup + on every idle wake
-- [ ] Spawn sync loop in main.rs
+pub struct Artist {
+    pub id: String,       // SHA-256(name)
+    pub name: String,
+}
+```
 
-### Phase 3: TUI
-- [ ] Create `kanade-tui` crate with ratatui + crossterm
-- [ ] Implement now-playing view (track info + progress bar)
-- [ ] Implement queue view
-- [ ] Implement library browser (albums → tracks)
-- [ ] Implement search (FTS5)
-- [ ] Implement key bindings
-- [ ] Wire TUI as foreground process in main.rs
+## WebSocket Protocol
 
-### Phase 4: WS protocol extensions
-- [ ] Add browse/search/scan commands to WebSocket protocol
-- [ ] Add request/response message types (req_id)
-- [ ] Add scan progress broadcast
+### Client → Server
 
-### Phase 5 (future): Web frontend
-- React + TypeScript + Vite
-- Same WebSocket protocol as TUI
-- Separate repository or `web/` subdirectory
+Two message types:
 
-### Phase 6 (future): SwiftUI client
-- iOS/macOS native app
-- Same WebSocket protocol
+**Commands** (fire-and-forget, no response):
+```json
+{"cmd": "play", "zone_id": "..."}
+{"cmd": "pause", "zone_id": "..."}
+{"cmd": "stop", "zone_id": "..."}
+{"cmd": "next", "zone_id": "..."}
+{"cmd": "previous", "zone_id": "..."}
+{"cmd": "seek", "zone_id": "...", "position_secs": 30.0}
+{"cmd": "set_volume", "zone_id": "...", "volume": 75}
+{"cmd": "set_shuffle", "zone_id": "...", "shuffle": true}
+{"cmd": "set_repeat", "zone_id": "...", "repeat": "all"}
+{"cmd": "add_to_queue", "zone_id": "...", "track": {...}}
+{"cmd": "clear_queue", "zone_id": "..."}
+```
 
-## 6. Key Design Decisions
+**Requests** (expect response with matching `req_id`):
+```json
+{"req_id": 1, "req": "get_zones"}
+{"req_id": 2, "req": "get_albums"}
+{"req_id": 3, "req": "get_album_tracks", "album_id": "..."}
+{"req_id": 4, "req": "search", "query": "..."}
+{"req_id": 5, "req": "get_queue", "zone_id": "..."}
+```
+
+### Server → Client
+
+**State push** (sent on any state change):
+```json
+{"type": "state", "zones": [{"id": "...", "name": "Living Room", "status": "playing", ...}]}
+```
+
+**Response** (replies to requests):
+```json
+{"type": "response", "req_id": 2, "data": {"albums": [...]}}
+{"type": "response", "req_id": 3, "data": {"tracks": [...]}}
+{"type": "response", "req_id": 5, "data": {"tracks": [...], "current_index": 0}}
+```
+
+## Data Flow
+
+### Playback
+```
+Client: {"cmd": "play", "zone_id": "abc"}
+  → WS server → Core.play_zone("abc")
+    → Core sets zone.status = Playing
+    → Core forwards to all outputs in zone: output.play()
+      → MPD: "play" command
+    → Core broadcasts state to all clients via WS
+  → All clients receive {"type": "state", ...}
+```
+
+### Library browsing
+```
+Client: {"req_id": 1, "req": "get_albums"}
+  → WS server → DB.get_all_albums()
+  → WS server replies: {"type": "response", "req_id": 1, "data": {"albums": [...]}}
+Client: {"req_id": 2, "req": "get_album_tracks", "album_id": "xyz"}
+  → WS server → DB.get_tracks_by_album_id("xyz")
+  → WS server replies: {"type": "response", "req_id": 2, "data": {"tracks": [...]}}
+Client: {"cmd": "add_to_queue", "zone_id": "abc", "track": {...}}
+  → WS server → Core.add_to_queue("abc", track)
+    → Core forwards: output.add([file_path])
+    → Core broadcasts state
+```
+
+### Scanning
+```
+Server startup → scanner.run()
+  → walkdir → extract metadata → upsert into DB
+  → periodic incremental scan (mtime comparison)
+  → state push: {"type": "scan_progress", ...}
+```
+
+## Key Design Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Metadata extraction | `lofty` | Single crate, covers tags + audio properties, all major formats, no C deps |
+| State ownership | Core is sole owner | Clients are stateless; no state divergence |
+| Output abstraction | `AudioOutput` trait | MPD is one backend among many; swap freely |
+| Zone concept | From day one | Multi-room, per-zone queue/volume/repeat |
+| Client protocol | WebSocket JSON | Language-agnostic, bidirectional, fire-and-forget + req/res |
+| Metadata source | File tags only (lofty + dsf-meta) | No external APIs; deterministic IDs via SHA-256 |
 | ID scheme | SHA-256 of natural key | Deterministic, no drift between runs |
-| TUI integration | In-process (shared Arc) | Zero latency, simplest wiring, reference implementation |
-| MPD sync strategy | `idle` command loop | Canonical MPD pattern, no polling overhead |
-| DB access model | Sync in `spawn_blocking` | rusqlite is sync; wrapping is simpler than async SQLite |
-| State ownership | MPD is source of truth | Prevents state divergence between Kanade and MPD |
+| Scan strategy | Server-side background loop | Startup scan + periodic incremental |
+| DB | SQLite + FTS5 | Embedded, no external service dependency |
+| Scanner | lofty (PCM) + dsf-meta (DSD) | Two-tier extraction for format coverage |
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MUSIC_DIR` | — | Root music directory |
+| `DB_PATH` | `kanade.db` | SQLite database path |
+| `SCAN_INTERVAL_SECS` | `300` | Scan interval |
+| `WS_ADDR` | `0.0.0.0:8080` | WebSocket listen address |
+| `OH_ADDR` | `0.0.0.0:8090` | OpenHome listen address |
+| `MPD_HOST` | `127.0.0.1` | Default MPD host |
+| `MPD_PORT` | `6600` | Default MPD port |
+| `LOG_PATH` | `kanade.log` | Log file path |
+| `RUST_LOG` | `kanade=info` | Log filter |

@@ -1,0 +1,23 @@
+[package]
+name = "kanade-scanner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kanade-core = { path = "../kanade-core" }
+kanade-db = { path = "../kanade-db" }
+walkdir = { workspace = true }
+lofty = { workspace = true }
+dsf-meta = "0.2"
+id3 = "1"
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -40,17 +40,23 @@ impl Database {
     /// constraint (`tracks.album_id → albums.id`) is always satisfied.
     #[instrument(skip(self, track))]
     pub fn upsert_track(&self, track: &Track) -> anyhow::Result<()> {
-        // Derive album from the directory that contains the file.
+        self.upsert_track_with_mtime(track, None)
+    }
+
+    /// Insert or replace a track record with its file modification time.
+    ///
+    /// `mtime` is the Unix epoch seconds from `std::fs::metadata().modified()`.
+    /// Used by the scanner for incremental re-extraction.
+    #[instrument(skip(self, track))]
+    pub fn upsert_track_with_mtime(&self, track: &Track, mtime: Option<i64>) -> anyhow::Result<()> {
         let album_id = Path::new(&track.file_path).parent().map(|dir| {
             let dir_str = dir.to_string_lossy().into_owned();
             let aid = id_of(&dir_str);
-            // Ensure the album row exists before the FK reference below.
             let album = kanade_core::model::Album {
                 id: aid.clone(),
                 dir_path: dir_str,
                 title: track.album_title.clone(),
             };
-            // Ignore error — if the album row already exists we just keep it.
             let _ = self.upsert_album(&album);
             aid
         });
@@ -58,8 +64,8 @@ impl Database {
         self.conn.execute(
             r#"INSERT INTO tracks
                (file_path, id, album_id, title, track_number, duration_secs,
-                format, sample_rate, artist, album_title, composer)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                format, sample_rate, artist, album_title, composer, mtime)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                ON CONFLICT(file_path) DO UPDATE SET
                    id            = excluded.id,
                    album_id      = excluded.album_id,
@@ -70,7 +76,8 @@ impl Database {
                    sample_rate   = excluded.sample_rate,
                    artist        = excluded.artist,
                    album_title   = excluded.album_title,
-                   composer      = excluded.composer"#,
+                   composer      = excluded.composer,
+                   mtime         = excluded.mtime"#,
             params![
                 track.file_path,
                 track.id,
@@ -83,9 +90,23 @@ impl Database {
                 track.artist,
                 track.album_title,
                 track.composer,
+                mtime,
             ],
         )?;
         Ok(())
+    }
+
+    /// Fetch the stored mtime for a track, or `None` if not yet scanned.
+    pub fn get_track_mtime(&self, file_path: &str) -> anyhow::Result<Option<i64>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT mtime FROM tracks WHERE file_path = ?1",
+                params![file_path],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?;
+        Ok(result.flatten())
     }
 
     /// Fetch a single track by its file path, or `None` if not found.
@@ -115,10 +136,46 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Fetch all audio file paths currently in the database.
+    pub fn get_all_track_paths(&self) -> anyhow::Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_path FROM tracks ORDER BY file_path")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Delete tracks whose file_path is NOT in `known_paths`.
+    ///
+    /// Returns the number of rows removed.  Call after a full scan to purge
+    /// entries for files that have been deleted from disk.
+    pub fn purge_missing(&self, known_paths: &[String]) -> anyhow::Result<u64> {
+        if known_paths.is_empty() {
+            let removed = self.conn.execute("DELETE FROM tracks", [])?;
+            return Ok(removed as u64);
+        }
+
+        let placeholders: Vec<String> = known_paths.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "DELETE FROM tracks WHERE file_path NOT IN ({})",
+            placeholders.join(",")
+        );
+
+        let params: Vec<&dyn rusqlite::types::ToSql> = known_paths
+            .iter()
+            .map(|p| p as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let removed = self.conn.execute(&sql, params.as_slice())?;
+        Ok(removed as u64)
+    }
+
     /// Delete a track by file path (e.g. when the file is removed from disk).
     pub fn delete_track(&self, file_path: &str) -> anyhow::Result<()> {
-        self.conn
-            .execute("DELETE FROM tracks WHERE file_path = ?1", params![file_path])?;
+        self.conn.execute(
+            "DELETE FROM tracks WHERE file_path = ?1",
+            params![file_path],
+        )?;
         Ok(())
     }
 
@@ -158,6 +215,21 @@ impl Database {
         Ok(result)
     }
 
+    /// Fetch all albums, ordered by directory path.
+    pub fn get_all_albums(&self) -> anyhow::Result<Vec<Album>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, dir_path, title FROM albums ORDER BY dir_path")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Album {
+                id: row.get(0)?,
+                dir_path: row.get(1)?,
+                title: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     // ------------------------------------------------------------------
     // Artist operations
     // ------------------------------------------------------------------
@@ -180,7 +252,12 @@ impl Database {
             .query_row(
                 "SELECT id, name FROM artists WHERE id = ?1",
                 params![artist_id],
-                |row| Ok(Artist { id: row.get(0)?, name: row.get(1)? }),
+                |row| {
+                    Ok(Artist {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                    })
+                },
             )
             .optional()?;
         Ok(result)
@@ -191,15 +268,51 @@ impl Database {
     // ------------------------------------------------------------------
 
     /// Search tracks using FTS5.  Returns matching track IDs (SHA-256 hex).
-    ///
-    /// `query` accepts standard FTS5 query syntax, e.g. `"blue moon"` or
-    /// `artist:Miles`.
     pub fn search(&self, query: &str) -> anyhow::Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT track_id FROM tracks_fts WHERE tracks_fts MATCH ?1 ORDER BY rank",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT track_id FROM tracks_fts WHERE tracks_fts MATCH ?1 ORDER BY rank")?;
         let rows = stmt.query_map(params![query], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Search tracks using FTS5, returning full `Track` objects.
+    pub fn search_tracks(&self, query: &str) -> anyhow::Result<Vec<Track>> {
+        let ids = self.search(query)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            r#"SELECT file_path, id, title, track_number, duration_secs,
+                      format, sample_rate, artist, album_title, composer
+               FROM tracks WHERE id IN ({}) ORDER BY file_path"#,
+            placeholders.join(",")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), row_to_track)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    // ------------------------------------------------------------------
+    // Transaction helpers
+    // ------------------------------------------------------------------
+
+    /// Execute a batch of upserts inside a single transaction.
+    /// The closure receives the same `Database` reference but the connection
+    /// is already in a transaction — just call `upsert_track_with_mtime`.
+    pub fn in_transaction<F, R>(&self, f: F) -> anyhow::Result<R>
+    where
+        F: FnOnce(&Self) -> anyhow::Result<R>,
+    {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = f(self)?;
+        tx.commit()?;
+        Ok(result)
     }
 }
 
@@ -334,5 +447,110 @@ mod tests {
 
         let ids = db.search("ZZZnonexistent").unwrap();
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn upsert_track_with_mtime() {
+        let db = Database::open_in_memory().unwrap();
+        let track = sample_track("/music/album/01.flac");
+        db.upsert_track_with_mtime(&track, Some(1700000000))
+            .unwrap();
+        let mtime = db.get_track_mtime("/music/album/01.flac").unwrap();
+        assert_eq!(mtime, Some(1700000000));
+    }
+
+    #[test]
+    fn upsert_track_without_mtime() {
+        let db = Database::open_in_memory().unwrap();
+        let track = sample_track("/music/album/01.flac");
+        db.upsert_track(&track).unwrap();
+        let mtime = db.get_track_mtime("/music/album/01.flac").unwrap();
+        assert_eq!(mtime, None);
+    }
+
+    #[test]
+    fn purge_missing_removes_deleted_files() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = sample_track("/music/album/01.flac");
+        let t2 = sample_track("/music/album/02.flac");
+        db.upsert_track(&t1).unwrap();
+        db.upsert_track(&t2).unwrap();
+
+        let removed = db
+            .purge_missing(&["/music/album/01.flac".to_string()])
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(db
+            .get_track_by_path("/music/album/01.flac")
+            .unwrap()
+            .is_some());
+        assert!(db
+            .get_track_by_path("/music/album/02.flac")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn get_all_albums() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = sample_track("/music/album_a/01.flac");
+        let t2 = sample_track("/music/album_b/01.flac");
+        db.upsert_track(&t1).unwrap();
+        db.upsert_track(&t2).unwrap();
+
+        let albums = db.get_all_albums().unwrap();
+        assert_eq!(albums.len(), 2);
+    }
+
+    #[test]
+    fn search_tracks_returns_full_tracks() {
+        let db = Database::open_in_memory().unwrap();
+        let track = sample_track("/music/album/01.flac");
+        db.upsert_track(&track).unwrap();
+
+        let results = db.search_tracks("Test").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, Some("Test Track".to_string()));
+    }
+
+    #[test]
+    fn get_all_track_paths() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = sample_track("/music/a.flac");
+        let t2 = sample_track("/music/b.flac");
+        db.upsert_track(&t1).unwrap();
+        db.upsert_track(&t2).unwrap();
+
+        let paths = db.get_all_track_paths().unwrap();
+        assert_eq!(paths.len(), 2);
+    }
+
+    #[test]
+    fn in_transaction_commits_on_success() {
+        let db = Database::open_in_memory().unwrap();
+        let track = sample_track("/music/album/01.flac");
+        db.in_transaction(|db| {
+            db.upsert_track(&track)?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(db
+            .get_track_by_path("/music/album/01.flac")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn in_transaction_rollbacks_on_failure() {
+        let db = Database::open_in_memory().unwrap();
+        let track = sample_track("/music/album/01.flac");
+        let _: Result<(), anyhow::Error> = db.in_transaction(|db| {
+            db.upsert_track(&track)?;
+            anyhow::bail!("forced rollback")
+        });
+        assert!(db
+            .get_track_by_path("/music/album/01.flac")
+            .unwrap()
+            .is_none());
     }
 }
