@@ -8,6 +8,7 @@ pub struct Track {
     pub artist: Option<String>,
     pub album_title: Option<String>,
     pub composer: Option<String>,
+    pub genre: Option<String>,
     pub track_number: Option<u32>,
     pub duration_secs: Option<f64>,
     pub format: Option<String>,

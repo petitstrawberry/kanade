@@ -64,8 +64,8 @@ impl Database {
         self.conn.execute(
             r#"INSERT INTO tracks
                (file_path, id, album_id, title, track_number, duration_secs,
-                format, sample_rate, artist, album_title, composer, mtime)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                format, sample_rate, artist, album_title, composer, genre, mtime)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                ON CONFLICT(file_path) DO UPDATE SET
                    id            = excluded.id,
                    album_id      = excluded.album_id,
@@ -77,6 +77,7 @@ impl Database {
                    artist        = excluded.artist,
                    album_title   = excluded.album_title,
                    composer      = excluded.composer,
+                   genre         = excluded.genre,
                    mtime         = excluded.mtime"#,
             params![
                 track.file_path,
@@ -90,6 +91,7 @@ impl Database {
                 track.artist,
                 track.album_title,
                 track.composer,
+                track.genre,
                 mtime,
             ],
         )?;
@@ -115,7 +117,7 @@ impl Database {
             .conn
             .query_row(
                 r#"SELECT file_path, id, title, track_number, duration_secs,
-                          format, sample_rate, artist, album_title, composer
+                          format, sample_rate, artist, album_title, composer, genre
                    FROM tracks WHERE file_path = ?1"#,
                 params![file_path],
                 row_to_track,
@@ -129,7 +131,7 @@ impl Database {
             .conn
             .query_row(
                 r#"SELECT file_path, id, title, track_number, duration_secs,
-                          format, sample_rate, artist, album_title, composer
+                          format, sample_rate, artist, album_title, composer, genre
                    FROM tracks WHERE id = ?1"#,
                 params![track_id],
                 row_to_track,
@@ -142,7 +144,7 @@ impl Database {
     pub fn get_tracks_by_album_id(&self, album_id: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT file_path, id, title, track_number, duration_secs,
-                      format, sample_rate, artist, album_title, composer
+                      format, sample_rate, artist, album_title, composer, genre
                FROM tracks WHERE album_id = ?1
                ORDER BY track_number, title"#,
         )?;
@@ -299,7 +301,7 @@ impl Database {
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
             r#"SELECT file_path, id, title, track_number, duration_secs,
-                      format, sample_rate, artist, album_title, composer
+                      format, sample_rate, artist, album_title, composer, genre
                FROM tracks WHERE id IN ({}) ORDER BY file_path"#,
             placeholders.join(",")
         );
@@ -309,6 +311,56 @@ impl Database {
             .collect();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params.as_slice(), row_to_track)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    // ------------------------------------------------------------------
+    // Artist queries (aggregate)
+    // ------------------------------------------------------------------
+
+    /// Fetch all distinct artist names, sorted alphabetically.
+    pub fn get_all_artists(&self) -> anyhow::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL ORDER BY artist",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Fetch all tracks by a given artist name.
+    pub fn get_tracks_by_artist(&self, artist: &str) -> anyhow::Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT file_path, id, title, track_number, duration_secs,
+                      format, sample_rate, artist, album_title, composer, genre
+               FROM tracks WHERE artist = ?1
+               ORDER BY album_title, track_number, title"#,
+        )?;
+        let rows = stmt.query_map(params![artist], row_to_track)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    // ------------------------------------------------------------------
+    // Genre queries (aggregate)
+    // ------------------------------------------------------------------
+
+    /// Fetch all distinct genre names, sorted alphabetically.
+    pub fn get_all_genres(&self) -> anyhow::Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT genre FROM tracks WHERE genre IS NOT NULL ORDER BY genre")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Fetch all tracks by a given genre name.
+    pub fn get_tracks_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT file_path, id, title, track_number, duration_secs,
+                      format, sample_rate, artist, album_title, composer, genre
+               FROM tracks WHERE genre = ?1
+               ORDER BY artist, album_title, track_number, title"#,
+        )?;
+        let rows = stmt.query_map(params![genre], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -346,6 +398,7 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         artist: row.get(7)?,
         album_title: row.get(8)?,
         composer: row.get(9)?,
+        genre: row.get(10)?,
     })
 }
 
@@ -370,6 +423,7 @@ mod tests {
             artist: Some("Test Artist".to_string()),
             album_title: Some("Test Album".to_string()),
             composer: Some("Test Composer".to_string()),
+            genre: Some("Test Genre".to_string()),
         }
     }
 

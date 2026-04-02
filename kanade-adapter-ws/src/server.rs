@@ -170,6 +170,38 @@ async fn handle_request(
             }).await.unwrap_or(None).unwrap_or_default();
             WsResponse::AlbumTracks { tracks }
         }
+        WsRequest::GetArtists => {
+            let path = db_path.clone();
+            let artists = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_all_artists().ok()
+            }).await.unwrap_or(None).unwrap_or_default();
+            WsResponse::Artists { artists }
+        }
+        WsRequest::GetArtistTracks { artist } => {
+            let path = db_path.clone();
+            let tracks = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_tracks_by_artist(&artist).ok()
+            }).await.unwrap_or(None).unwrap_or_default();
+            WsResponse::ArtistTracks { tracks }
+        }
+        WsRequest::GetGenres => {
+            let path = db_path.clone();
+            let genres = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_all_genres().ok()
+            }).await.unwrap_or(None).unwrap_or_default();
+            WsResponse::Genres { genres }
+        }
+        WsRequest::GetGenreTracks { genre } => {
+            let path = db_path.clone();
+            let tracks = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_tracks_by_genre(&genre).ok()
+            }).await.unwrap_or(None).unwrap_or_default();
+            WsResponse::GenreTracks { tracks }
+        }
         WsRequest::Search { query } => {
             let path = db_path.clone();
             let tracks = tokio::task::spawn_blocking(move || {

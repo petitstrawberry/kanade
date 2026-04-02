@@ -12,7 +12,7 @@ use rusqlite::{Connection, Result};
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
 /// Schema version. Increment when adding columns or tables.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     artist        TEXT,
     album_title   TEXT,
     composer      TEXT,
+    genre         TEXT,
     mtime         INTEGER                 -- file modification time (epoch secs)
 );
 
@@ -75,14 +76,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
     album,
     artist,
     composer,
+    genre,
     tokenize='unicode61'
 );
 
 -- Keep the FTS index in sync with the tracks table via triggers.
 CREATE TRIGGER IF NOT EXISTS tracks_fts_insert
 AFTER INSERT ON tracks BEGIN
-    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, composer)
-    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.composer);
+    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, composer, genre)
+    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.composer, new.genre);
 END;
 
 CREATE TRIGGER IF NOT EXISTS tracks_fts_delete
@@ -93,22 +95,31 @@ END;
 CREATE TRIGGER IF NOT EXISTS tracks_fts_update
 AFTER UPDATE ON tracks BEGIN
     DELETE FROM tracks_fts WHERE rowid = old.rowid;
-    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, composer)
-    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.composer);
+    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, composer, genre)
+    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.composer, new.genre);
 END;
 "#;
 
 /// Migrations keyed by schema version.
 /// Each migration is idempotent (safe to re-run).
-static MIGRATIONS: &[(&str, &str)] = &[(
-    "1",
-    r#"
-        -- v1: add mtime column for incremental scanning
-        -- Safe to re-run: will fail silently if column already exists.
-        -- (We catch the error in apply_migrations.)
-        ALTER TABLE tracks ADD COLUMN mtime INTEGER;
-    "#,
-)];
+static MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "1",
+        r#"
+            -- v1: add mtime column for incremental scanning
+            -- Safe to re-run: will fail silently if column already exists.
+            -- (We catch the error in apply_migrations.)
+            ALTER TABLE tracks ADD COLUMN mtime INTEGER;
+        "#,
+    ),
+    (
+        "2",
+        r#"
+            -- v2: add genre column for library browsing
+            ALTER TABLE tracks ADD COLUMN genre TEXT;
+        "#,
+    ),
+];
 
 /// Apply the base schema DDL to an open connection.
 pub fn apply(conn: &Connection) -> Result<()> {
