@@ -64,13 +64,25 @@ fn render_tabs(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 fn render_queue(f: &mut Frame, area: ratatui::layout::Rect, app: &App, state: &PlaybackState) {
     let zone = state.zone(&app.active_zone_id);
     let queue = zone.map(|z| z.queue.as_slice()).unwrap_or(&[]);
+    let current_index = zone.and_then(|z| z.current_index);
 
     let items: Vec<ListItem> = queue
         .iter()
-        .map(|track| {
+        .enumerate()
+        .map(|(i, track)| {
             let title = track.title.as_deref().unwrap_or("(untitled)");
             let artist = track.artist.as_deref().unwrap_or("(unknown)");
-            ListItem::new(format!("{title} - {artist}"))
+            if current_index == Some(i) {
+                ListItem::new(Line::from(vec![
+                    Span::styled("▶ ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        format!("{title} - {artist}"),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]))
+            } else {
+                ListItem::new(format!("  {title} - {artist}"))
+            }
         })
         .collect();
 
