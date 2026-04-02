@@ -179,6 +179,14 @@ async fn handle_request(
             }).await.unwrap_or(None).unwrap_or_default();
             WsResponse::Artists { artists }
         }
+        WsRequest::GetArtistAlbums { artist } => {
+            let path = db_path.clone();
+            let albums = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_albums_by_artist(&artist).ok()
+            }).await.unwrap_or(None).unwrap_or_default();
+            WsResponse::ArtistAlbums { albums }
+        }
         WsRequest::GetArtistTracks { artist } => {
             let path = db_path.clone();
             let tracks = tokio::task::spawn_blocking(move || {

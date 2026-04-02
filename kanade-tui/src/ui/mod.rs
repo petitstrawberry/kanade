@@ -106,16 +106,16 @@ fn render_queue(f: &mut Frame, area: ratatui::layout::Rect, app: &App, state: &P
 }
 
 fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    if app.library_browse_view {
+    if app.library_level == 0 {
+        render_library_master(f, area, app);
+    } else {
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(35), Constraint::Min(0)])
+            .constraints([Constraint::Percentage(30), Constraint::Min(0)])
             .split(area);
 
         render_library_master(f, columns[0], app);
-        render_library_detail(f, columns[1], app);
-    } else {
-        render_library_master(f, area, app);
+        render_library_right(f, columns[1], app);
     }
 }
 
@@ -169,39 +169,65 @@ fn render_library_master(f: &mut Frame, area: ratatui::layout::Rect, app: &App) 
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
-fn render_library_detail(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let tracks = app.library_browse_tracks();
-    let has_items = !tracks.is_empty();
-
-    let items: Vec<ListItem> = tracks
-        .iter()
-        .map(|t| {
-            let name = t.title.as_deref().unwrap_or("(untitled)");
-            let artist = t.artist.as_deref().unwrap_or("");
-            if artist.is_empty() {
-                ListItem::new(name.to_string())
-            } else {
-                ListItem::new(format!("{name} - {artist}"))
-            }
-        })
-        .collect();
-
+fn render_library_right(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
     let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title("Tracks (Enter:add, h:back)")
-                .borders(Borders::ALL),
-        )
-        .highlight_style(highlight)
-        .highlight_symbol("> ");
+    if app.library_mode == LibraryMode::Artists && app.library_level == 1 {
+        let mut items: Vec<ListItem> = vec![ListItem::new(Line::from(vec![
+            Span::styled("★ ", Style::default().fg(Color::Yellow)),
+            Span::raw("All albums"),
+        ]))];
+        for album in &app.artist_albums {
+            let t = album.title.as_deref().unwrap_or("(untitled album)");
+            items.push(ListItem::new(t.to_string()));
+        }
 
-    let mut list_state = app.library_detail.borrow_mut();
-    if has_items && list_state.selected().is_none() {
-        list_state.select(Some(0));
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title("Albums (Enter:open)")
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(highlight)
+            .highlight_symbol("> ");
+
+        let mut list_state = app.library_detail.borrow_mut();
+        if !app.artist_albums.is_empty() && list_state.selected().is_none() {
+            list_state.select(Some(0));
+        }
+        f.render_stateful_widget(list, area, &mut list_state);
+    } else {
+        let tracks = app.library_browse_tracks();
+        let has_items = !tracks.is_empty();
+
+        let items: Vec<ListItem> = tracks
+            .iter()
+            .map(|t| {
+                let name = t.title.as_deref().unwrap_or("(untitled)");
+                let artist = t.artist.as_deref().unwrap_or("");
+                if artist.is_empty() {
+                    ListItem::new(name.to_string())
+                } else {
+                    ListItem::new(format!("{name} - {artist}"))
+                }
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title("Tracks (Enter:add, h/Esc:back)")
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(highlight)
+            .highlight_symbol("> ");
+
+        let mut list_state = app.library_detail.borrow_mut();
+        if has_items && list_state.selected().is_none() {
+            list_state.select(Some(0));
+        }
+        f.render_stateful_widget(list, area, &mut list_state);
     }
-    f.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn render_search(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
@@ -281,7 +307,7 @@ fn render_help(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
             "Space:play/pause  n:next  p:prev  s:stop  +/-:vol  Tab:switch  q:quit"
         }
         Panel::Queue => "j/k:nav  Enter:play  d:del  J/K:move  Tab:switch  q:quit",
-        Panel::Library => "j/k:nav  l/Enter:open  h:back  m/M:mode  Tab:switch  q:quit",
+        Panel::Library => "j/k:nav  l/Enter:open  h/Esc:back  m/M:mode  Tab:switch  q:quit",
         Panel::Search => {
             if app.in_search_input {
                 "type:search  Backspace:delete  Enter:finish  Esc:cancel  q:quit"

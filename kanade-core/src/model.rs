@@ -6,6 +6,7 @@ pub struct Track {
     pub file_path: String,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album_artist: Option<String>,
     pub album_title: Option<String>,
     pub composer: Option<String>,
     pub genre: Option<String>,

@@ -12,7 +12,7 @@ use rusqlite::{Connection, Result};
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
 /// Schema version. Increment when adding columns or tables.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     format        TEXT,
     sample_rate   INTEGER,
     artist        TEXT,
+    album_artist  TEXT,
     album_title   TEXT,
     composer      TEXT,
     genre         TEXT,
@@ -71,20 +72,20 @@ CREATE INDEX IF NOT EXISTS idx_tracks_mtime    ON tracks (mtime);
 -- content='' means FTS5 stores its own copy — simpler to keep in sync.
 -- -------------------------------------------------------------------
 CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
-    track_id UNINDEXED,   -- SHA-256(file_path), joins back to tracks.id
+    track_id UNINDEXED,
     title,
     album,
     artist,
+    album_artist,
     composer,
     genre,
     tokenize='unicode61'
 );
 
--- Keep the FTS index in sync with the tracks table via triggers.
 CREATE TRIGGER IF NOT EXISTS tracks_fts_insert
 AFTER INSERT ON tracks BEGIN
-    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, composer, genre)
-    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.composer, new.genre);
+    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, album_artist, composer, genre)
+    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.album_artist, new.composer, new.genre);
 END;
 
 CREATE TRIGGER IF NOT EXISTS tracks_fts_delete
@@ -95,8 +96,8 @@ END;
 CREATE TRIGGER IF NOT EXISTS tracks_fts_update
 AFTER UPDATE ON tracks BEGIN
     DELETE FROM tracks_fts WHERE rowid = old.rowid;
-    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, composer, genre)
-    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.composer, new.genre);
+    INSERT INTO tracks_fts(rowid, track_id, title, album, artist, album_artist, composer, genre)
+    VALUES (new.rowid, new.id, new.title, new.album_title, new.artist, new.album_artist, new.composer, new.genre);
 END;
 "#;
 
@@ -115,8 +116,13 @@ static MIGRATIONS: &[(&str, &str)] = &[
     (
         "2",
         r#"
-            -- v2: add genre column for library browsing
             ALTER TABLE tracks ADD COLUMN genre TEXT;
+        "#,
+    ),
+    (
+        "3",
+        r#"
+            ALTER TABLE tracks ADD COLUMN album_artist TEXT;
         "#,
     ),
 ];

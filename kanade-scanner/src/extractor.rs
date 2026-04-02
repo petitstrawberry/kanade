@@ -54,6 +54,7 @@ fn extract_dsf_track(path: &str) -> Result<Track> {
         format,
         sample_rate: Some(sample_rate),
         artist: None,
+        album_artist: None,
         album_title: None,
         composer: None,
         genre: None,
@@ -62,6 +63,10 @@ fn extract_dsf_track(path: &str) -> Result<Track> {
     if let Some(tag) = dsf.id3_tag() {
         track.title = tag.title().map(|s| s.to_string());
         track.artist = tag.artist().map(|s| s.to_string());
+        track.album_artist = tag
+            .get("TPE2")
+            .and_then(|f| f.content().text())
+            .map(|s: &str| s.to_string());
         track.album_title = tag.album().map(|s| s.to_string());
         track.track_number = tag.track();
         track.composer = tag
@@ -115,6 +120,7 @@ fn extract_lofty_track(path: &str) -> Result<Track> {
 
     let title = tag_string(tag, &ItemKey::TrackTitle);
     let artist = tag_string(tag, &ItemKey::TrackArtist);
+    let album_artist = tag_string(tag, &ItemKey::AlbumArtist);
     let album_title = tag_string(tag, &ItemKey::AlbumTitle);
     let composer = tag_string(tag, &ItemKey::Composer);
     let genre = tag_string(tag, &ItemKey::Genre);
@@ -139,6 +145,7 @@ fn extract_lofty_track(path: &str) -> Result<Track> {
         format,
         sample_rate,
         artist,
+        album_artist,
         album_title,
         composer,
         genre,

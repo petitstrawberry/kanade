@@ -68,6 +68,7 @@ pub enum WsRequest {
     GetAlbums,
     GetAlbumTracks { album_id: String },
     GetArtists,
+    GetArtistAlbums { artist: String },
     GetArtistTracks { artist: String },
     GetGenres,
     GetGenreTracks { genre: String },
@@ -98,6 +99,9 @@ pub enum WsResponse {
     },
     Artists {
         artists: Vec<String>,
+    },
+    ArtistAlbums {
+        albums: Vec<Album>,
     },
     ArtistTracks {
         tracks: Vec<Track>,
