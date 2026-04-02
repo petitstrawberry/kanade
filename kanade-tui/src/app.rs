@@ -412,7 +412,6 @@ impl App {
                     .select(if self.artists.is_empty() { None } else { Some(0) });
             }
             WsResponse::ArtistAlbums { albums } => {
-                tracing::info!("ArtistAlbums response: {} albums", albums.len());
                 let empty = albums.is_empty();
                 self.artist_albums = albums;
                 self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
@@ -429,7 +428,6 @@ impl App {
                     .select(if self.genres.is_empty() { None } else { Some(0) });
             }
             WsResponse::GenreAlbums { albums } => {
-                tracing::info!("GenreAlbums response: {} albums", albums.len());
                 let empty = albums.is_empty();
                 self.genre_albums = albums;
                 self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });

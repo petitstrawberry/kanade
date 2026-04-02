@@ -83,6 +83,7 @@ async fn main() -> Result<()> {
         MpdClient::new(mpd_host, mpd_port),
         core.state_handle(),
         broadcasters.clone(),
+        core.queue_generation(),
     );
     tokio::spawn(async move {
         mpd_sync.run().await;

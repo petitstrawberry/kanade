@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -15,6 +16,7 @@ pub struct Core {
     state: Arc<RwLock<PlaybackState>>,
     outputs: HashMap<String, Arc<dyn AudioOutput>>,
     broadcasters: Vec<Arc<dyn EventBroadcaster>>,
+    queue_generation: Arc<AtomicU64>,
 }
 
 impl Core {
@@ -26,6 +28,7 @@ impl Core {
             state: Arc::new(RwLock::new(PlaybackState { zones: Vec::new() })),
             outputs: outputs.into_iter().collect(),
             broadcasters,
+            queue_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -39,6 +42,14 @@ impl Core {
 
     pub fn state_handle(&self) -> Arc<RwLock<PlaybackState>> {
         Arc::clone(&self.state)
+    }
+
+    pub fn queue_generation(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.queue_generation)
+    }
+
+    fn bump_queue_generation(&self) {
+        self.queue_generation.fetch_add(1, Ordering::Relaxed);
     }
 
     pub async fn add_zone(&self, zone: Zone) {
@@ -123,6 +134,7 @@ impl Core {
         zone.position_secs = 0.0;
         let queue = Self::build_queue_file_paths(zone);
         drop(s);
+        self.bump_queue_generation();
         for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
         for o in self.each_output(zone_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
@@ -152,6 +164,7 @@ impl Core {
         zone.position_secs = 0.0;
         let queue = Self::build_queue_file_paths(zone);
         drop(s);
+        self.bump_queue_generation();
         for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
         for o in self.each_output(zone_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
@@ -232,6 +245,7 @@ impl Core {
     }
 
     pub async fn clear_zone_queue(&self, zone_id: &str) -> Result<(), CoreError> {
+        self.bump_queue_generation();
         for o in self.each_output(zone_id).await? { o.set_queue(&[]).await?; }
         let mut s = self.state.write().await;
         let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;
@@ -250,6 +264,8 @@ impl Core {
         if index >= zone.queue.len() {
             return Err(CoreError::QueueIndexOutOfBounds);
         }
+        // MPD playlist offset: position 0 = core current_index
+        let mpd_index = zone.current_index.map(|ci| index.saturating_sub(ci)).unwrap_or(index);
         zone.queue.remove(index);
         match zone.current_index {
             Some(ci) if ci == index && zone.queue.is_empty() => {
@@ -265,7 +281,7 @@ impl Core {
             _ => {}
         }
         drop(s);
-        for o in self.each_output(zone_id).await? { o.remove(index).await?; }
+        for o in self.each_output(zone_id).await? { o.remove(mpd_index).await?; }
         self.broadcast().await;
         Ok(())
     }
@@ -281,6 +297,8 @@ impl Core {
         if from >= zone.queue.len() || to >= zone.queue.len() {
             return Err(CoreError::QueueIndexOutOfBounds);
         }
+        let mpd_from = zone.current_index.map(|ci| from.saturating_sub(ci)).unwrap_or(from);
+        let mpd_to = zone.current_index.map(|ci| to.saturating_sub(ci)).unwrap_or(to);
         let track = zone.queue.remove(from);
         zone.queue.insert(to, track);
         match zone.current_index {
@@ -296,7 +314,7 @@ impl Core {
             _ => {}
         }
         drop(s);
-        for o in self.each_output(zone_id).await? { o.move_track(from, to).await?; }
+        for o in self.each_output(zone_id).await? { o.move_track(mpd_from, mpd_to).await?; }
         self.broadcast().await;
         Ok(())
     }
@@ -311,6 +329,7 @@ impl Core {
         zone.position_secs = 0.0;
         let queue = Self::build_queue_file_paths(zone);
         drop(s);
+        self.bump_queue_generation();
         for o in self.each_output(zone_id).await? { o.set_queue(&queue).await?; }
         for o in self.each_output(zone_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
@@ -329,6 +348,7 @@ impl Core {
         start_index: Option<usize>,
     ) -> Result<(), CoreError> {
         let file_paths: Vec<String> = tracks.iter().map(|t| t.file_path.clone()).collect();
+        self.bump_queue_generation();
         for o in self.each_output(zone_id).await? { o.set_queue(&file_paths).await?; }
         let mut s = self.state.write().await;
         let zone = s.zone_mut(zone_id).ok_or(CoreError::ZoneNotFound)?;

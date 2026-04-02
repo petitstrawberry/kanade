@@ -1,4 +1,9 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
+    time::Duration,
+};
 
 use kanade_core::{model::PlaybackStatus, ports::EventBroadcaster, state::PlaybackState};
 use tokio::{
@@ -15,7 +20,10 @@ pub struct MpdStateSync {
     broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
     host: String,
     port: u16,
-    last_song: Option<usize>,
+    queue_generation: Arc<AtomicU64>,
+    last_generation: u64,
+    last_mpd_song: Option<usize>,
+    base_core_index: usize,
 }
 
 impl MpdStateSync {
@@ -25,13 +33,17 @@ impl MpdStateSync {
         _client: MpdClient,
         state: std::sync::Arc<RwLock<PlaybackState>>,
         broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
+        queue_generation: Arc<AtomicU64>,
     ) -> Self {
         Self {
             state,
             broadcasters,
             host: host.into(),
             port,
-            last_song: None,
+            last_generation: queue_generation.load(Ordering::Relaxed),
+            queue_generation,
+            last_mpd_song: None,
+            base_core_index: 0,
         }
     }
 
@@ -122,16 +134,25 @@ impl MpdStateSync {
             _ => PlaybackStatus::Stopped,
         };
 
+        let current_gen = self.queue_generation.load(Ordering::Relaxed);
+
         let mut state = self.state.write().await;
         if let Some(zone) = state.zones.get_mut(0) {
             zone.position_secs = elapsed;
             zone.status = playback_status;
             zone.volume = volume;
-            if let Some(song_idx) = song {
-                if self.last_song != Some(song_idx) {
-                    self.last_song = Some(song_idx);
-                    zone.current_index = Some(song_idx);
+
+            if current_gen != self.last_generation {
+                self.last_generation = current_gen;
+                self.base_core_index = zone.current_index.unwrap_or(0);
+                self.last_mpd_song = Some(0);
+            } else if let Some(song_idx) = song {
+                if self.last_mpd_song != Some(song_idx) {
+                    let new_core_index = self.base_core_index
+                        .saturating_add(song_idx);
+                    zone.current_index = Some(new_core_index);
                     zone.position_secs = 0.0;
+                    self.last_mpd_song = Some(song_idx);
                 }
             }
         }
