@@ -102,6 +102,15 @@ impl Scanner {
         let known_paths: Vec<String> = entries.iter().map(|e| e.file_path.clone()).collect();
         result.removed = db.purge_missing(&known_paths)? as usize;
 
+        let mut seen_dirs = std::collections::HashSet::new();
+        for entry in &entries {
+            if seen_dirs.insert(&entry.dir_path) {
+                if let Some(art) = walker::find_cover_art(Path::new(&entry.dir_path)) {
+                    let _ = db.update_album_artwork(&entry.dir_path, Some(&art));
+                }
+            }
+        }
+
         let _ = progress_tx.send(ScanProgress {
             scanned: total,
             added: result.added,

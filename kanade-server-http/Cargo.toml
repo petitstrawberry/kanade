@@ -5,5 +5,8 @@ edition = "2021"
 
 [dependencies]
 kanade-db = { path = "../kanade-db" }
+kanade-core = { path = "../kanade-core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
+lofty = { workspace = true }
+anyhow = { workspace = true }

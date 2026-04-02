@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, path::Path};
+use std::{ffi::OsStr, fs, path::Path};
 
 use tracing::warn;
 use walkdir::WalkDir;
@@ -24,6 +24,24 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 const SKIP_PREFIXES: &[&str] = &[".", "_"];
+
+const COVER_FILENAMES: &[&str] = &[
+    "cover.jpg",
+    "cover.jpeg",
+    "cover.png",
+    "folder.jpg",
+    "folder.jpeg",
+    "folder.png",
+    "artwork.jpg",
+    "artwork.jpeg",
+    "artwork.png",
+    "album.jpg",
+    "album.jpeg",
+    "album.png",
+    "front.jpg",
+    "front.jpeg",
+    "front.png",
+];
 
 fn should_skip_dir(dir_name: &OsStr) -> bool {
     let name = dir_name.to_string_lossy();
@@ -94,6 +112,39 @@ pub fn walk_audio_files(root: &Path, extensions: &[&str]) -> Vec<AudioFileEntry>
     }
 
     entries
+}
+
+/// Search a directory for common cover art filenames.
+/// Returns the first match found, preferring exact case then case-insensitive.
+pub fn find_cover_art(dir: &Path) -> Option<String> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return None,
+    };
+
+    // Exact case match first
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if COVER_FILENAMES.iter().any(|c| *c == name_str.as_ref()) {
+            return Some(entry.path().to_string_lossy().into_owned());
+        }
+    }
+
+    // Case-insensitive fallback
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return None,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_lower = name.to_string_lossy().to_lowercase();
+        if COVER_FILENAMES.iter().any(|c| c.to_lowercase() == name_lower) {
+            return Some(entry.path().to_string_lossy().into_owned());
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

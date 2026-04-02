@@ -12,7 +12,7 @@ use rusqlite::{Connection, Result};
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
 /// Schema version. Increment when adding columns or tables.
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -33,9 +33,10 @@ CREATE TABLE IF NOT EXISTS artists (
 -- One directory == one album (the user's folder layout is the truth).
 -- -------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS albums (
-    id       TEXT NOT NULL PRIMARY KEY,   -- SHA-256(dir_path)
-    dir_path TEXT NOT NULL UNIQUE,
-    title    TEXT                          -- from the first track's tag
+    id           TEXT NOT NULL PRIMARY KEY,   -- SHA-256(dir_path)
+    dir_path     TEXT NOT NULL UNIQUE,
+    title        TEXT,                         -- from the first track's tag
+    artwork_path TEXT                          -- path to cover art image
 );
 
 -- -------------------------------------------------------------------
@@ -124,6 +125,13 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "3",
         r#"
             ALTER TABLE tracks ADD COLUMN album_artist TEXT;
+            UPDATE tracks SET mtime = NULL;
+        "#,
+    ),
+    (
+        "4",
+        r#"
+            ALTER TABLE albums ADD COLUMN artwork_path TEXT;
             UPDATE tracks SET mtime = NULL;
         "#,
     ),

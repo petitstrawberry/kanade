@@ -58,6 +58,7 @@ fn extract_dsf_track(path: &str) -> Result<Track> {
         album_title: None,
         composer: None,
         genre: None,
+        album_id: None,
     };
 
     if let Some(tag) = dsf.id3_tag() {
@@ -149,6 +150,7 @@ fn extract_lofty_track(path: &str) -> Result<Track> {
         album_title,
         composer,
         genre,
+        album_id: None,
     })
 }
 

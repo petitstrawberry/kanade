@@ -2,6 +2,7 @@
 export interface Track {
   id: string;
   file_path: string;
+  album_id: string | null;
   title: string | null;
   artist: string | null;
   album_artist: string | null;
@@ -18,6 +19,7 @@ export interface Album {
   id: string;
   dir_path: string;
   title: string | null;
+  artwork_path: string | null;
 }
 
 export type RepeatMode = "off" | "one" | "all";

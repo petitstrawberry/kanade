@@ -56,6 +56,7 @@ impl Database {
                 id: aid.clone(),
                 dir_path: dir_str,
                 title: track.album_title.clone(),
+                artwork_path: None,
             };
             let _ = self.upsert_album(&album);
             aid
@@ -118,13 +119,13 @@ impl Database {
         let result = self
             .conn
             .query_row(
-                r#"SELECT file_path, id, title, track_number, duration_secs,
-                          format, sample_rate, artist, album_artist, album_title, composer, genre
-                   FROM tracks WHERE file_path = ?1"#,
-                params![file_path],
-                row_to_track,
-            )
-            .optional()?;
+                 r#"SELECT file_path, id, title, track_number, duration_secs,
+                           format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+                    FROM tracks WHERE file_path = ?1"#,
+                 params![file_path],
+                 row_to_track,
+             )
+             .optional()?;
         Ok(result)
     }
 
@@ -133,8 +134,8 @@ impl Database {
             .conn
             .query_row(
                 r#"SELECT file_path, id, title, track_number, duration_secs,
-                          format, sample_rate, artist, album_artist, album_title, composer, genre
-                   FROM tracks WHERE id = ?1"#,
+                           format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+                    FROM tracks WHERE id = ?1"#,
                 params![track_id],
                 row_to_track,
             )
@@ -146,9 +147,9 @@ impl Database {
     pub fn get_tracks_by_album_id(&self, album_id: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT file_path, id, title, track_number, duration_secs,
-                      format, sample_rate, artist, album_artist, album_title, composer, genre
-               FROM tracks WHERE album_id = ?1
-               ORDER BY track_number, title"#,
+                      format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+                FROM tracks WHERE album_id = ?1
+                ORDER BY track_number, title"#,
         )?;
         let rows = stmt.query_map(params![album_id], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -204,14 +205,35 @@ impl Database {
     /// Insert or replace an album record.
     pub fn upsert_album(&self, album: &Album) -> anyhow::Result<()> {
         self.conn.execute(
-            r#"INSERT INTO albums (id, dir_path, title)
-               VALUES (?1, ?2, ?3)
+            r#"INSERT INTO albums (id, dir_path, title, artwork_path)
+               VALUES (?1, ?2, ?3, ?4)
                ON CONFLICT(id) DO UPDATE SET
-                   dir_path = excluded.dir_path,
-                   title    = excluded.title"#,
-            params![album.id, album.dir_path, album.title],
+                   dir_path     = excluded.dir_path,
+                   title        = excluded.title,
+                   artwork_path = excluded.artwork_path"#,
+            params![album.id, album.dir_path, album.title, album.artwork_path],
         )?;
         Ok(())
+    }
+
+    pub fn update_album_artwork(&self, dir_path: &str, artwork_path: Option<&str>) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE albums SET artwork_path = ?1 WHERE dir_path = ?2",
+            params![artwork_path, dir_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_album_artwork_path(&self, album_id: &str) -> anyhow::Result<Option<String>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT artwork_path FROM albums WHERE id = ?1",
+                params![album_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        Ok(result.flatten())
     }
 
     /// Fetch an album by its directory-hash ID.
@@ -219,13 +241,14 @@ impl Database {
         let result = self
             .conn
             .query_row(
-                "SELECT id, dir_path, title FROM albums WHERE id = ?1",
+                "SELECT id, dir_path, title, artwork_path FROM albums WHERE id = ?1",
                 params![album_id],
                 |row| {
                     Ok(Album {
                         id: row.get(0)?,
                         dir_path: row.get(1)?,
                         title: row.get(2)?,
+                        artwork_path: row.get(3)?,
                     })
                 },
             )
@@ -237,12 +260,13 @@ impl Database {
     pub fn get_all_albums(&self) -> anyhow::Result<Vec<Album>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, dir_path, title FROM albums ORDER BY dir_path")?;
+            .prepare("SELECT id, dir_path, title, artwork_path FROM albums ORDER BY dir_path")?;
         let rows = stmt.query_map([], |row| {
             Ok(Album {
                 id: row.get(0)?,
                 dir_path: row.get(1)?,
                 title: row.get(2)?,
+                artwork_path: row.get(3)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -303,8 +327,8 @@ impl Database {
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
             r#"SELECT file_path, id, title, track_number, duration_secs,
-                      format, sample_rate, artist, album_artist, album_title, composer, genre
-               FROM tracks WHERE id IN ({}) ORDER BY file_path"#,
+                      format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+                FROM tracks WHERE id IN ({}) ORDER BY file_path"#,
             placeholders.join(",")
         );
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
@@ -336,9 +360,9 @@ impl Database {
     pub fn get_tracks_by_artist(&self, artist: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT file_path, id, title, track_number, duration_secs,
-                      format, sample_rate, artist, album_artist, album_title, composer, genre
-               FROM tracks WHERE artist = ?1 OR album_artist = ?1
-               ORDER BY album_title, track_number, title"#,
+                      format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+                FROM tracks WHERE artist = ?1 OR album_artist = ?1
+                ORDER BY album_title, track_number, title"#,
         )?;
         let rows = stmt.query_map(params![artist], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -346,7 +370,7 @@ impl Database {
 
     pub fn get_albums_by_artist(&self, artist: &str) -> anyhow::Result<Vec<Album>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT a.id, a.dir_path, a.title
+            r#"SELECT DISTINCT a.id, a.dir_path, a.title, a.artwork_path
                FROM albums a
                JOIN tracks t ON t.album_id = a.id
                WHERE t.artist = ?1 OR t.album_artist = ?1
@@ -357,6 +381,7 @@ impl Database {
                 id: row.get(0)?,
                 dir_path: row.get(1)?,
                 title: row.get(2)?,
+                artwork_path: row.get(3)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -379,8 +404,8 @@ impl Database {
     pub fn get_tracks_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT file_path, id, title, track_number, duration_secs,
-                      format, sample_rate, artist, album_artist, album_title, composer, genre
-               FROM tracks WHERE genre = ?1
+                      format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+                FROM tracks WHERE genre = ?1
                ORDER BY artist, album_title, track_number, title"#,
         )?;
         let rows = stmt.query_map(params![genre], row_to_track)?;
@@ -389,7 +414,7 @@ impl Database {
 
     pub fn get_albums_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Album>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT a.id, a.dir_path, a.title
+            r#"SELECT DISTINCT a.id, a.dir_path, a.title, a.artwork_path
                FROM albums a
                JOIN tracks t ON t.album_id = a.id
                WHERE t.genre = ?1
@@ -400,6 +425,7 @@ impl Database {
                 id: row.get(0)?,
                 dir_path: row.get(1)?,
                 title: row.get(2)?,
+                artwork_path: row.get(3)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -431,6 +457,7 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     Ok(Track {
         file_path: row.get(0)?,
         id: row.get(1)?,
+        album_id: row.get(12)?,
         title: row.get(2)?,
         track_number: row.get(3)?,
         duration_secs: row.get(4)?,
@@ -457,6 +484,7 @@ mod tests {
         Track {
             id: id_of(file_path),
             file_path: file_path.to_string(),
+            album_id: None,
             title: Some("Test Track".to_string()),
             track_number: Some(1),
             duration_secs: Some(180.0),
@@ -476,8 +504,10 @@ mod tests {
         let track = sample_track("/music/album/01.flac");
         db.upsert_track(&track).unwrap();
 
+        let mut expected = track;
+        expected.album_id = Some(id_of("/music/album"));
         let fetched = db.get_track_by_path("/music/album/01.flac").unwrap();
-        assert_eq!(fetched, Some(track));
+        assert_eq!(fetched, Some(expected));
     }
 
     #[test]
@@ -486,8 +516,10 @@ mod tests {
         let track = sample_track("/music/album/01.flac");
         db.upsert_track(&track).unwrap();
         db.upsert_track(&track).unwrap(); // must not error
+        let mut expected = track;
+        expected.album_id = Some(id_of("/music/album"));
         let fetched = db.get_track_by_path("/music/album/01.flac").unwrap();
-        assert_eq!(fetched, Some(track));
+        assert_eq!(fetched, Some(expected));
     }
 
     #[test]
@@ -522,6 +554,7 @@ mod tests {
             id: id_of("/music/my_album"),
             dir_path: "/music/my_album".to_string(),
             title: Some("My Album".to_string()),
+            artwork_path: None,
         };
         db.upsert_album(&album).unwrap();
         let fetched = db.get_album_by_id(&album.id).unwrap();

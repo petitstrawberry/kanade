@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use kanade_db::Database;
+use lofty::{probe::Probe, prelude::*};
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
@@ -11,6 +12,46 @@ use tracing::{debug, error, info, warn};
 pub struct MediaServer {
     db_path: PathBuf,
     addr: SocketAddr,
+}
+
+enum ArtResult {
+    FilePath(String),
+    Embedded(String, Vec<u8>),
+}
+
+fn extract_embedded_picture(file_path: &str) -> Option<lofty::picture::Picture> {
+    let tagged_file = Probe::open(file_path).ok()?.read().ok()?;
+    let tag = match tagged_file.primary_tag() {
+        Some(t) => t,
+        None => tagged_file.first_tag()?,
+    };
+    tag.pictures()
+        .iter()
+        .find(|p| matches!(p.pic_type(), lofty::picture::PictureType::CoverFront))
+        .cloned()
+        .or_else(|| tag.pictures().first().cloned())
+}
+
+async fn serve_bytes(
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    method: &str,
+    content_type: &str,
+    data: &[u8],
+) -> Result<(), String> {
+    let len = data.len() as u64;
+    let headers = vec![
+        ("Content-Type".to_string(), content_type.to_string()),
+        ("Content-Length".to_string(), len.to_string()),
+        ("Cache-Control".to_string(), "public, max-age=86400".to_string()),
+    ];
+    write_response_headers(writer, 200, "OK", &headers).await?;
+    if method != "HEAD" {
+        writer
+            .write_all(data)
+            .await
+            .map_err(|e| format!("write body: {e}"))?;
+    }
+    Ok(())
 }
 
 impl MediaServer {
@@ -94,23 +135,115 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
     }
 
     let Some(track_id) = path.strip_prefix("/media/tracks/") else {
-        write_simple_response(&mut writer, 404, "Not Found", &[]).await?;
+        let Some(album_id) = path.strip_prefix("/media/art/") else {
+            write_simple_response(&mut writer, 404, "Not Found", &[]).await?;
+            return Ok(());
+        };
+
+        let album_id = album_id.split('?').next().unwrap_or(album_id).to_string();
+
+        let result = tokio::task::spawn_blocking({
+            let db_path = db_path.clone();
+            let album_id = album_id.clone();
+            move || -> Result<ArtResult, String> {
+                let db = Database::open(&db_path).map_err(|e| e.to_string())?;
+                if let Some(art_path) = db.get_album_artwork_path(&album_id).map_err(|e| e.to_string())? {
+                    return Ok(ArtResult::FilePath(art_path));
+                }
+                let tracks = db.get_tracks_by_album_id(&album_id).map_err(|e| e.to_string())?;
+                if let Some(track) = tracks.into_iter().next() {
+                    if let Some(picture) = extract_embedded_picture(&track.file_path) {
+                        let mime = picture
+                            .mime_type()
+                            .map(|m| m.as_str())
+                            .unwrap_or("image/jpeg")
+                            .to_string();
+                        let data = picture.data().to_vec();
+                        return Ok(ArtResult::Embedded(mime, data));
+                    }
+                }
+                Err("no artwork found".to_string())
+            }
+        })
+        .await;
+
+        match result {
+            Ok(Ok(ArtResult::FilePath(art_path))) => {
+                let art_type = content_type_for_path(&art_path);
+                if let Err(e) = serve_static_file(&mut writer, method, &art_path, art_type).await {
+                    let status = if e.contains("open file:") { 404 } else { 500 };
+                    let text = if status == 404 { "Not Found" } else { "Internal Server Error" };
+                    write_simple_response(&mut writer, status, text, &[]).await?;
+                    return Err(e);
+                }
+            }
+            Ok(Ok(ArtResult::Embedded(mime, data))) => {
+                serve_bytes(&mut writer, method, &mime, &data).await?;
+            }
+            Ok(Err(e)) => {
+                write_simple_response(&mut writer, 404, "Artwork Not Found", &[]).await?;
+                debug!("artwork not found for album {album_id}: {e}");
+            }
+            Err(e) => {
+                write_simple_response(&mut writer, 500, "Internal Server Error", b"db error").await?;
+                return Err(format!("db join: {e}"));
+            }
+        }
         return Ok(());
     };
 
     let track_id = track_id.split('?').next().unwrap_or(track_id).to_string();
 
-    let track = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let db = Database::open(&db_path).ok()?;
         db.get_track_by_id(&track_id).ok()?
     })
-    .await
-    .map_err(|e| format!("db join: {e}"))?
-    .ok_or_else(|| "track not found".to_string())?;
+    .await;
 
-    let mut file = File::open(&track.file_path)
+    let track = match result {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            write_simple_response(&mut writer, 404, "Track Not Found", &[]).await?;
+            return Ok(());
+        }
+        Err(e) => {
+            write_simple_response(&mut writer, 500, "Internal Server Error", b"db error").await?;
+            return Err(format!("db join: {e}"));
+        }
+    };
+
+    let mut file = match File::open(&track.file_path).await {
+        Ok(f) => f,
+        Err(e) => {
+            write_simple_response(&mut writer, 404, "File Not Found", &[]).await?;
+            return Err(format!("open file: {e}"));
+        }
+    };
+
+    let content_type = content_type_for_path(&track.file_path);
+    serve_file_with_range(&mut writer, method, &mut file, content_type, range_header.as_deref()).await?;
+    Ok(())
+}
+
+async fn serve_static_file(
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    method: &str,
+    path: &str,
+    content_type: &str,
+) -> Result<(), String> {
+    let mut file = File::open(path)
         .await
         .map_err(|e| format!("open file: {e}"))?;
+    serve_file_with_range(writer, method, &mut file, content_type, None).await
+}
+
+async fn serve_file_with_range(
+    writer: &mut tokio::net::tcp::OwnedWriteHalf,
+    method: &str,
+    file: &mut File,
+    content_type: &str,
+    range_header: Option<&str>,
+) -> Result<(), String> {
     let metadata = file
         .metadata()
         .await
@@ -126,14 +259,14 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
                 ("Content-Range".to_string(), format!("bytes */{total_len}")),
                 ("Content-Length".to_string(), "0".to_string()),
             ];
-            write_response_headers(&mut writer, 416, "Range Not Satisfiable", &headers).await?;
+            write_response_headers(writer, 416, "Range Not Satisfiable", &headers).await?;
             return Ok(());
         }
     };
 
     let content_length = if total_len == 0 { 0 } else { end - start + 1 };
     let mut headers = vec![
-        ("Content-Type".to_string(), content_type_for_path(&track.file_path).to_string()),
+        ("Content-Type".to_string(), content_type.to_string()),
         ("Accept-Ranges".to_string(), "bytes".to_string()),
         ("Content-Length".to_string(), content_length.to_string()),
     ];
@@ -144,7 +277,7 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
         ));
     }
 
-    write_response_headers(&mut writer, status_code, status_text, &headers).await?;
+    write_response_headers(writer, status_code, status_text, &headers).await?;
 
     if method == "HEAD" || content_length == 0 {
         return Ok(());

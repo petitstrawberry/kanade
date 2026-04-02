@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub struct Track {
     pub id: String,
     pub file_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album_artist: Option<String>,
@@ -21,6 +23,8 @@ pub struct Album {
     pub id: String,
     pub dir_path: String,
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artwork_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
