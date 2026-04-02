@@ -96,7 +96,7 @@ async fn handle_connection(
             result = state_rx.recv() => {
                 match result {
                     Ok(json) => {
-                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                        if ws_tx.send(Message::Text(json)).await.is_err() {
                             break;
                         }
                     }
