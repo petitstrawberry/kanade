@@ -1,0 +1,11 @@
+[package]
+name = "kanade-adapter-mpd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kanade-core = { path = "../kanade-core" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
