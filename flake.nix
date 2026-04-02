@@ -46,6 +46,7 @@
           mpd
           mpc
           tmux
+          nodejs_22
         ];
       in
       {
