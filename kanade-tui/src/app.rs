@@ -88,6 +88,7 @@ pub struct App {
     pub should_quit: bool,
     pub queue_list: RefCell<ListState>,
     pub library_list: RefCell<ListState>,
+    pub library_detail: RefCell<ListState>,
     pub search_list: RefCell<ListState>,
     pub search_query: String,
     pub search_results: Vec<kanade_core::model::Track>,
@@ -97,7 +98,6 @@ pub struct App {
     pub artist_tracks: Vec<kanade_core::model::Track>,
     pub genres: Vec<String>,
     pub genre_tracks: Vec<kanade_core::model::Track>,
-    pub in_album_view: bool,
     pub library_mode: LibraryMode,
     pub library_browse_view: bool,
     pub active_zone_id: String,
@@ -121,6 +121,7 @@ impl App {
             should_quit: false,
             queue_list: RefCell::new(ListState::default()),
             library_list: RefCell::new(ListState::default()),
+            library_detail: RefCell::new(ListState::default()),
             search_list: RefCell::new(ListState::default()),
             search_query: String::new(),
             search_results: Vec::new(),
@@ -130,7 +131,6 @@ impl App {
             artist_tracks: Vec::new(),
             genres: Vec::new(),
             genre_tracks: Vec::new(),
-            in_album_view: false,
             library_mode: LibraryMode::Albums,
             library_browse_view: false,
             active_zone_id: "default".to_string(),
@@ -139,19 +139,11 @@ impl App {
         }
     }
 
-    fn library_items(&self) -> usize {
-        if self.library_browse_view {
-            match self.library_mode {
-                LibraryMode::Albums => self.album_tracks.len(),
-                LibraryMode::Artists => self.artist_tracks.len(),
-                LibraryMode::Genres => self.genre_tracks.len(),
-            }
-        } else {
-            match self.library_mode {
-                LibraryMode::Albums => self.albums.len(),
-                LibraryMode::Artists => self.artists.len(),
-                LibraryMode::Genres => self.genres.len(),
-            }
+    fn library_master_len(&self) -> usize {
+        match self.library_mode {
+            LibraryMode::Albums => self.albums.len(),
+            LibraryMode::Artists => self.artists.len(),
+            LibraryMode::Genres => self.genres.len(),
         }
     }
 
@@ -177,6 +169,74 @@ impl App {
         });
     }
 
+    fn library_enter_detail(&mut self) {
+        if self.library_browse_view {
+            return;
+        }
+        let idx = self.library_list.borrow().selected();
+        if idx.is_none() {
+            return;
+        }
+        let i = idx.unwrap();
+
+        self.req_counter += 1;
+        let req_id = self.req_counter;
+        let tx = self.ws_tx.clone();
+
+        match self.library_mode {
+            LibraryMode::Albums => {
+                if let Some(album) = self.albums.get(i) {
+                    let album_id = album.id.clone();
+                    self.library_browse_view = true;
+                    self.library_detail.borrow_mut().select(None);
+                    tokio::spawn(async move {
+                        let _ = tx.send(ClientMessage::Request {
+                            req_id,
+                            req: WsRequest::GetAlbumTracks { album_id },
+                        }).await;
+                    });
+                }
+            }
+            LibraryMode::Artists => {
+                if let Some(artist) = self.artists.get(i) {
+                    let artist = artist.clone();
+                    self.library_browse_view = true;
+                    self.library_detail.borrow_mut().select(None);
+                    tokio::spawn(async move {
+                        let _ = tx.send(ClientMessage::Request {
+                            req_id,
+                            req: WsRequest::GetArtistTracks { artist },
+                        }).await;
+                    });
+                }
+            }
+            LibraryMode::Genres => {
+                if let Some(genre) = self.genres.get(i) {
+                    let genre = genre.clone();
+                    self.library_browse_view = true;
+                    self.library_detail.borrow_mut().select(None);
+                    tokio::spawn(async move {
+                        let _ = tx.send(ClientMessage::Request {
+                            req_id,
+                            req: WsRequest::GetGenreTracks { genre },
+                        }).await;
+                    });
+                }
+            }
+        }
+    }
+
+    fn library_leave_detail(&mut self) {
+        if !self.library_browse_view {
+            return;
+        }
+        self.library_browse_view = false;
+        self.album_tracks.clear();
+        self.artist_tracks.clear();
+        self.genre_tracks.clear();
+        self.library_detail.borrow_mut().select(None);
+    }
+
     pub fn handle_response(&mut self, data: WsResponse) {
         match data {
             WsResponse::Albums { albums } => {
@@ -188,8 +248,7 @@ impl App {
             WsResponse::AlbumTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.album_tracks = tracks;
-                let mut list = self.library_list.borrow_mut();
-                list.select(if empty { None } else { Some(0) });
+                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
             }
             WsResponse::Artists { artists } => {
                 self.artists = artists;
@@ -200,8 +259,7 @@ impl App {
             WsResponse::ArtistTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.artist_tracks = tracks;
-                let mut list = self.library_list.borrow_mut();
-                list.select(if empty { None } else { Some(0) });
+                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
             }
             WsResponse::Genres { genres } => {
                 self.genres = genres;
@@ -212,14 +270,12 @@ impl App {
             WsResponse::GenreTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.genre_tracks = tracks;
-                let mut list = self.library_list.borrow_mut();
-                list.select(if empty { None } else { Some(0) });
+                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
             }
             WsResponse::SearchResults { tracks } => {
                 let empty = tracks.is_empty();
                 self.search_results = tracks;
-                let mut list = self.search_list.borrow_mut();
-                list.select(if empty { None } else { Some(0) });
+                self.search_list.borrow_mut().select(if empty { None } else { Some(0) });
             }
             WsResponse::Queue { tracks: _, current_index: _ } => {}
         }
@@ -271,13 +327,7 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Esc => {
-                if self.active_panel == Panel::Library && self.library_browse_view {
-                    self.library_browse_view = false;
-                    self.album_tracks.clear();
-                    self.artist_tracks.clear();
-                    self.genre_tracks.clear();
-                    self.library_list.borrow_mut().select(None);
-                } else if self.active_panel == Panel::Search {
+                if self.active_panel == Panel::Search {
                     self.search_query.clear();
                     self.search_results.clear();
                     self.search_list.borrow_mut().select(None);
@@ -305,9 +355,7 @@ impl App {
                         _ => WsCommand::Play { zone_id: zid.clone() },
                     };
                     tokio::spawn(async move {
-                        let _ = tx
-                            .send(ClientMessage::Command(cmd))
-                            .await;
+                        let _ = tx.send(ClientMessage::Command(cmd)).await;
                     });
                 }
             }
@@ -316,9 +364,7 @@ impl App {
                     let tx = self.ws_tx.clone();
                     let zid = zone_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx
-                            .send(ClientMessage::Command(WsCommand::Next { zone_id: zid }))
-                            .await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Next { zone_id: zid })).await;
                     });
                 }
             }
@@ -327,9 +373,7 @@ impl App {
                     let tx = self.ws_tx.clone();
                     let zid = zone_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx
-                            .send(ClientMessage::Command(WsCommand::Previous { zone_id: zid }))
-                            .await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Previous { zone_id: zid })).await;
                     });
                 }
             }
@@ -338,9 +382,7 @@ impl App {
                     let tx = self.ws_tx.clone();
                     let zid = zone_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx
-                            .send(ClientMessage::Command(WsCommand::Stop { zone_id: zid }))
-                            .await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Stop { zone_id: zid })).await;
                     });
                 }
             }
@@ -351,12 +393,9 @@ impl App {
                         let tx = self.ws_tx.clone();
                         let zid = zone_id.clone();
                         tokio::spawn(async move {
-                            let _ = tx
-                                .send(ClientMessage::Command(WsCommand::SetVolume {
-                                    zone_id: zid,
-                                    volume: vol,
-                                }))
-                                .await;
+                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume {
+                                zone_id: zid, volume: vol,
+                            })).await;
                         });
                     }
                 }
@@ -368,18 +407,15 @@ impl App {
                         let tx = self.ws_tx.clone();
                         let zid = zone_id.clone();
                         tokio::spawn(async move {
-                            let _ = tx
-                                .send(ClientMessage::Command(WsCommand::SetVolume {
-                                    zone_id: zid,
-                                    volume: vol,
-                                }))
-                                .await;
+                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume {
+                                zone_id: zid, volume: vol,
+                            })).await;
                         });
                     }
                 }
             }
-            KeyCode::Up => self.select_prev(state),
-            KeyCode::Down => self.select_next(state),
+            KeyCode::Up | KeyCode::Char('k') => self.select_prev(state),
+            KeyCode::Down | KeyCode::Char('j') => self.select_next(state),
             KeyCode::Enter => self.select_item(state).await,
             KeyCode::Char('/') => {
                 self.active_panel = Panel::Search;
@@ -397,7 +433,57 @@ impl App {
                     self.request_library_list();
                 }
             }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.active_panel == Panel::Library {
+                    if !self.library_browse_view {
+                        self.library_enter_detail();
+                    } else {
+                        self.library_detail_move_next();
+                    }
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.active_panel == Panel::Library {
+                    if self.library_browse_view {
+                        self.library_leave_detail();
+                    } else {
+                        self.library_list_move_prev();
+                    }
+                }
+            }
+            KeyCode::Char('d') => {
+                if self.active_panel == Panel::Queue {
+                    self.queue_remove(state);
+                }
+            }
+            KeyCode::Char('J') => {
+                if self.active_panel == Panel::Queue {
+                    self.queue_move_down(state);
+                }
+            }
+            KeyCode::Char('K') => {
+                if self.active_panel == Panel::Queue {
+                    self.queue_move_up(state);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn library_detail_move_next(&self) {
+        let len = self.library_browse_tracks().len();
+        let mut list = self.library_detail.borrow_mut();
+        let cur = list.selected().unwrap_or(0);
+        if len > 0 && cur + 1 < len {
+            list.select(Some(cur + 1));
+        }
+    }
+
+    fn library_list_move_prev(&self) {
+        let mut list = self.library_list.borrow_mut();
+        let cur = list.selected().unwrap_or(0);
+        if cur > 0 {
+            list.select(Some(cur - 1));
         }
     }
 
@@ -411,13 +497,21 @@ impl App {
                 }
             }
             Panel::Library => {
-                let max = self.library_items();
-                let mut list = self.library_list.borrow_mut();
-                let cur = list.selected().unwrap_or(0);
-                if cur > 0 {
-                    list.select(Some(cur - 1));
+                if self.library_browse_view {
+                    let len = self.library_browse_tracks().len();
+                    let mut list = self.library_detail.borrow_mut();
+                    let cur = list.selected().unwrap_or(0);
+                    if cur > 0 {
+                        list.select(Some(cur - 1));
+                    }
+                    let _ = len;
+                } else {
+                    let mut list = self.library_list.borrow_mut();
+                    let cur = list.selected().unwrap_or(0);
+                    if cur > 0 {
+                        list.select(Some(cur - 1));
+                    }
                 }
-                let _ = max;
             }
             Panel::Search => {
                 let mut list = self.search_list.borrow_mut();
@@ -430,10 +524,10 @@ impl App {
         }
     }
 
-    fn select_next(&self, _state: &PlaybackState) {
+    fn select_next(&self, state: &PlaybackState) {
         match self.active_panel {
             Panel::Queue => {
-                let len = _state.zone(&self.active_zone_id)
+                let len = state.zone(&self.active_zone_id)
                     .map(|z| z.queue.len())
                     .unwrap_or(0);
                 let mut list = self.queue_list.borrow_mut();
@@ -443,11 +537,20 @@ impl App {
                 }
             }
             Panel::Library => {
-                let max = self.library_items();
-                let mut list = self.library_list.borrow_mut();
-                let cur = list.selected().unwrap_or(0);
-                if max > 0 && cur + 1 < max {
-                    list.select(Some(cur + 1));
+                if self.library_browse_view {
+                    let len = self.library_browse_tracks().len();
+                    let mut list = self.library_detail.borrow_mut();
+                    let cur = list.selected().unwrap_or(0);
+                    if len > 0 && cur + 1 < len {
+                        list.select(Some(cur + 1));
+                    }
+                } else {
+                    let max = self.library_master_len();
+                    let mut list = self.library_list.borrow_mut();
+                    let cur = list.selected().unwrap_or(0);
+                    if max > 0 && cur + 1 < max {
+                        list.select(Some(cur + 1));
+                    }
                 }
             }
             Panel::Search => {
@@ -462,75 +565,87 @@ impl App {
         }
     }
 
+    fn queue_remove(&self, state: &PlaybackState) {
+        let idx = self.queue_list.borrow().selected();
+        if let Some(i) = idx {
+            let queue_len = state.zone(&self.active_zone_id)
+                .map(|z| z.queue.len())
+                .unwrap_or(0);
+            if i < queue_len {
+                let tx = self.ws_tx.clone();
+                let zid = self.active_zone_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(ClientMessage::Command(WsCommand::RemoveFromQueue {
+                        zone_id: zid, index: i,
+                    })).await;
+                });
+            }
+        }
+    }
+
+    fn queue_move_up(&self, state: &PlaybackState) {
+        let idx = self.queue_list.borrow().selected();
+        if let Some(i) = idx {
+            if i == 0 {
+                return;
+            }
+            let queue_len = state.zone(&self.active_zone_id)
+                .map(|z| z.queue.len())
+                .unwrap_or(0);
+            if i < queue_len {
+                let tx = self.ws_tx.clone();
+                let zid = self.active_zone_id.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
+                        zone_id: zid, from: i, to: i - 1,
+                    })).await;
+                });
+                drop(idx);
+                self.queue_list.borrow_mut().select(Some(i - 1));
+            }
+        }
+    }
+
+    fn queue_move_down(&self, state: &PlaybackState) {
+        let idx = self.queue_list.borrow().selected();
+        if let Some(i) = idx {
+            let queue_len = state.zone(&self.active_zone_id)
+                .map(|z| z.queue.len())
+                .unwrap_or(0);
+            if i + 1 >= queue_len {
+                return;
+            }
+            let tx = self.ws_tx.clone();
+            let zid = self.active_zone_id.clone();
+            tokio::spawn(async move {
+                let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
+                    zone_id: zid, from: i, to: i + 1,
+                })).await;
+            });
+            drop(idx);
+            self.queue_list.borrow_mut().select(Some(i + 1));
+        }
+    }
+
     async fn select_item(&mut self, _state: &PlaybackState) {
         let zone_id = self.active_zone_id.clone();
 
         match self.active_panel {
             Panel::Library => {
                 if self.library_browse_view {
-                    let idx = self.library_list.borrow().selected();
+                    let idx = self.library_detail.borrow().selected();
                     if let Some(i) = idx {
                         if let Some(track) = self.library_browse_tracks().get(i).cloned() {
                             let tx = self.ws_tx.clone();
                             tokio::spawn(async move {
-                                let _ = tx
-                                    .send(ClientMessage::Command(WsCommand::AddToQueue {
-                                        zone_id,
-                                        track,
-                                    }))
-                                    .await;
+                                let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
+                                    zone_id, track,
+                                })).await;
                             });
                         }
                     }
                 } else {
-                    let idx = self.library_list.borrow().selected();
-                    if let Some(i) = idx {
-                        self.req_counter += 1;
-                        let req_id = self.req_counter;
-                        let tx = self.ws_tx.clone();
-
-                        match self.library_mode {
-                            LibraryMode::Albums => {
-                                if let Some(album) = self.albums.get(i) {
-                                    let album_id = album.id.clone();
-                                    self.library_browse_view = true;
-                                    self.library_list.borrow_mut().select(None);
-                                    tokio::spawn(async move {
-                                        let _ = tx.send(ClientMessage::Request {
-                                            req_id,
-                                            req: WsRequest::GetAlbumTracks { album_id },
-                                        }).await;
-                                    });
-                                }
-                            }
-                            LibraryMode::Artists => {
-                                if let Some(artist) = self.artists.get(i) {
-                                    let artist = artist.clone();
-                                    self.library_browse_view = true;
-                                    self.library_list.borrow_mut().select(None);
-                                    tokio::spawn(async move {
-                                        let _ = tx.send(ClientMessage::Request {
-                                            req_id,
-                                            req: WsRequest::GetArtistTracks { artist },
-                                        }).await;
-                                    });
-                                }
-                            }
-                            LibraryMode::Genres => {
-                                if let Some(genre) = self.genres.get(i) {
-                                    let genre = genre.clone();
-                                    self.library_browse_view = true;
-                                    self.library_list.borrow_mut().select(None);
-                                    tokio::spawn(async move {
-                                        let _ = tx.send(ClientMessage::Request {
-                                            req_id,
-                                            req: WsRequest::GetGenreTracks { genre },
-                                        }).await;
-                                    });
-                                }
-                            }
-                        }
-                    }
+                    self.library_enter_detail();
                 }
             }
             Panel::Search => {
@@ -539,12 +654,9 @@ impl App {
                     if let Some(track) = self.search_results.get(i).cloned() {
                         let tx = self.ws_tx.clone();
                         tokio::spawn(async move {
-                            let _ = tx
-                                .send(ClientMessage::Command(WsCommand::AddToQueue {
-                                    zone_id,
-                                    track,
-                                }))
-                                .await;
+                            let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
+                                zone_id, track,
+                            })).await;
                         });
                     }
                 }
@@ -554,12 +666,9 @@ impl App {
                 if let Some(i) = idx {
                     let tx = self.ws_tx.clone();
                     tokio::spawn(async move {
-                        let _ = tx
-                            .send(ClientMessage::Command(WsCommand::PlayIndex {
-                                zone_id,
-                                index: i,
-                            }))
-                            .await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::PlayIndex {
+                            zone_id, index: i,
+                        })).await;
                     });
                 }
             }

@@ -106,72 +106,98 @@ fn render_queue(f: &mut Frame, area: ratatui::layout::Rect, app: &App, state: &P
 }
 
 fn render_library(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
-    let has_items: bool;
-    let title: String;
-    let items: Vec<ListItem>;
-
     if app.library_browse_view {
-        has_items = !app.library_browse_tracks().is_empty();
-        title = format!(
-            "Tracks (Enter: add to queue, Esc: back) [{}]",
-            app.library_mode.label()
-        );
-        items = app
-            .library_browse_tracks()
-            .iter()
-            .map(|t| {
-                let name = t.title.as_deref().unwrap_or("(untitled)");
-                let artist = t.artist.as_deref().unwrap_or("");
-                if artist.is_empty() {
-                    ListItem::new(name.to_string())
-                } else {
-                    ListItem::new(format!("{name} - {artist}"))
-                }
-            })
-            .collect();
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Min(0)])
+            .split(area);
+
+        render_library_master(f, columns[0], app);
+        render_library_detail(f, columns[1], app);
     } else {
-        match app.library_mode {
-            LibraryMode::Albums => {
-                has_items = !app.albums.is_empty();
-                title = "Albums (Enter: open, m/M: switch mode, Esc: back)".to_string();
-                items = app
-                    .albums
-                    .iter()
-                    .map(|album| {
-                        let t = album.title.as_deref().unwrap_or("(untitled album)");
-                        ListItem::new(t.to_string())
-                    })
-                    .collect();
-            }
-            LibraryMode::Artists => {
-                has_items = !app.artists.is_empty();
-                title = "Artists (Enter: open, m/M: switch mode, Esc: back)".to_string();
-                items = app
-                    .artists
-                    .iter()
-                    .map(|a| ListItem::new(a.clone()))
-                    .collect();
-            }
-            LibraryMode::Genres => {
-                has_items = !app.genres.is_empty();
-                title = "Genres (Enter: open, m/M: switch mode, Esc: back)".to_string();
-                items = app
-                    .genres
-                    .iter()
-                    .map(|g| ListItem::new(g.clone()))
-                    .collect();
-            }
-        }
+        render_library_master(f, area, app);
     }
+}
+
+fn render_library_master(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let mode_label = app.library_mode.label();
+    let (items, has_items): (Vec<ListItem>, bool) = match app.library_mode {
+        LibraryMode::Albums => {
+            let has = !app.albums.is_empty();
+            let list = app
+                .albums
+                .iter()
+                .map(|album| {
+                    let t = album.title.as_deref().unwrap_or("(untitled album)");
+                    ListItem::new(t.to_string())
+                })
+                .collect();
+            (list, has)
+        }
+        LibraryMode::Artists => {
+            let has = !app.artists.is_empty();
+            let list = app
+                .artists
+                .iter()
+                .map(|a| ListItem::new(a.clone()))
+                .collect();
+            (list, has)
+        }
+        LibraryMode::Genres => {
+            let has = !app.genres.is_empty();
+            let list = app
+                .genres
+                .iter()
+                .map(|g| ListItem::new(g.clone()))
+                .collect();
+            (list, has)
+        }
+    };
 
     let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
 
+    let title = format!("{} (m/M:switch)", mode_label);
     let list = List::new(items)
         .block(Block::default().title(title).borders(Borders::ALL))
         .highlight_style(highlight)
         .highlight_symbol("> ");
 
     let mut list_state = app.library_list.borrow_mut();
+    if has_items && list_state.selected().is_none() {
+        list_state.select(Some(0));
+    }
+    f.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn render_library_detail(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
+    let tracks = app.library_browse_tracks();
+    let has_items = !tracks.is_empty();
+
+    let items: Vec<ListItem> = tracks
+        .iter()
+        .map(|t| {
+            let name = t.title.as_deref().unwrap_or("(untitled)");
+            let artist = t.artist.as_deref().unwrap_or("");
+            if artist.is_empty() {
+                ListItem::new(name.to_string())
+            } else {
+                ListItem::new(format!("{name} - {artist}"))
+            }
+        })
+        .collect();
+
+    let highlight = Style::default().bg(Color::DarkGray).fg(Color::White);
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title("Tracks (Enter:add, h:back)")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(highlight)
+        .highlight_symbol("> ");
+
+    let mut list_state = app.library_detail.borrow_mut();
     if has_items && list_state.selected().is_none() {
         list_state.select(Some(0));
     }
@@ -254,8 +280,8 @@ fn render_help(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
         Panel::NowPlaying => {
             "Space:play/pause  n:next  p:prev  s:stop  +/-:vol  Tab:switch  q:quit"
         }
-        Panel::Queue => "↑/↓:navigate  Enter:play  Tab:switch  q:quit",
-        Panel::Library => "↑/↓:navigate  Enter:open/add  m/M:mode  Esc:back  Tab:switch  q:quit",
+        Panel::Queue => "j/k:nav  Enter:play  d:del  J/K:move  Tab:switch  q:quit",
+        Panel::Library => "j/k:nav  l/Enter:open  h:back  m/M:mode  Tab:switch  q:quit",
         Panel::Search => {
             if app.in_search_input {
                 "type:search  Backspace:delete  Enter:finish  Esc:cancel  q:quit"
