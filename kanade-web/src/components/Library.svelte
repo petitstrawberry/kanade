@@ -7,6 +7,8 @@
   type Mode = 'albums' | 'artists' | 'genres';
   let mode = $state<Mode>('albums');
 
+  const PLACEHOLDER_SVG = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="24" height="24" fill="%231a1b26"/><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>')}`;
+
   let albums = $state<Album[]>([]);
   let artists = $state<string[]>([]);
   let genres = $state<string[]>([]);
@@ -174,12 +176,14 @@
                       <img
                         src="{mediaBase}/media/art/{album.id}"
                         alt={album.title || 'Album'}
-                        onload={(e: Event) => { const img = e.target as HTMLImageElement; img.nextElementSibling?.classList.add('hidden'); }}
-                        onerror={(e: Event) => { const img = e.target as HTMLImageElement; img.classList.add('hidden'); }}
+                        onerror={(e: Event) => {
+                          const img = e.target as HTMLImageElement;
+                          if (!img.dataset.fallback) {
+                            img.dataset.fallback = '1';
+                            img.src = PLACEHOLDER_SVG;
+                          }
+                        }}
                       />
-                      <div class="placeholder-icon">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-                      </div>
                       <div class="play-overlay">
                         <button class="add-btn" onclick={(e) => { e.stopPropagation(); addAlbumToQueue(album.id); }}>+</button>
                       </div>
@@ -357,22 +361,6 @@
     height: 100%;
     object-fit: cover;
     display: block;
-  }
-
-  .placeholder-icon {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--fg);
-    opacity: 0.15;
-    transition: opacity 0.2s;
-  }
-
-  .placeholder-icon.hidden,
-  .album-cover img.hidden {
-    display: none;
   }
 
   .play-overlay {
