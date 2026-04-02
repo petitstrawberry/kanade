@@ -158,8 +158,20 @@ impl App {
     pub fn library_browse_tracks(&self) -> &[kanade_core::model::Track] {
         match self.library_mode {
             LibraryMode::Albums => &self.album_tracks,
-            LibraryMode::Artists => &self.artist_tracks,
-            LibraryMode::Genres => &self.genre_tracks,
+            LibraryMode::Artists => {
+                if !self.artist_tracks.is_empty() {
+                    &self.artist_tracks
+                } else {
+                    &self.album_tracks
+                }
+            }
+            LibraryMode::Genres => {
+                if !self.genre_tracks.is_empty() {
+                    &self.genre_tracks
+                } else {
+                    &self.album_tracks
+                }
+            }
         }
     }
 
@@ -278,6 +290,7 @@ impl App {
         };
 
         if i == 0 {
+            self.album_tracks.clear();
             self.library_enter_artist_all_tracks(&artist);
         } else {
             let album_idx = i - 1;
@@ -345,8 +358,9 @@ impl App {
             self.library_enter_genre_all_tracks(&genre);
         } else {
             let album_idx = i - 1;
-            if let Some(album) = self.genre_albums.get(album_idx) {
-                self.req_counter += 1;
+        if let Some(album) = self.genre_albums.get(album_idx) {
+            self.genre_tracks.clear();
+            self.req_counter += 1;
                 let req_id = self.req_counter;
                 let album_id = album.id.clone();
                 let tx = self.ws_tx.clone();
@@ -363,6 +377,7 @@ impl App {
     }
 
     fn library_enter_genre_all_tracks(&mut self, genre: &str) {
+        self.album_tracks.clear();
         self.req_counter += 1;
         let req_id = self.req_counter;
         let genre = genre.to_string();
