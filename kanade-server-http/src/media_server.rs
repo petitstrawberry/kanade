@@ -83,6 +83,11 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
         }
     }
 
+    if method == "OPTIONS" {
+        write_simple_response(&mut writer, 204, "No Content", &[]).await?;
+        return Ok(());
+    }
+
     if method != "GET" && method != "HEAD" {
         write_simple_response(&mut writer, 405, "Method Not Allowed", &[]).await?;
         return Ok(());
@@ -256,6 +261,8 @@ async fn write_response_headers(
     headers: &[(String, String)],
 ) -> Result<(), String> {
     let mut response = format!("HTTP/1.1 {status} {text}\r\n");
+    response.push_str("Access-Control-Allow-Origin: *\r\n");
+    response.push_str("Access-Control-Allow-Headers: Range\r\n");
     for (k, v) in headers {
         response.push_str(k);
         response.push_str(": ");
