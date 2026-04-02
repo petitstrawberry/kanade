@@ -13,6 +13,10 @@ use kanade_adapter_mpd::{MpdClient, MpdRenderer, MpdStateSync};
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{WsBroadcaster, WsServer};
 
+mod media_server;
+
+use media_server::MediaServer;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -30,8 +34,19 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(6600);
 
+    let media_addr: SocketAddr = std::env::var("MEDIA_ADDR")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| "0.0.0.0:8081".parse().unwrap());
+    let media_public_base_url = std::env::var("MEDIA_PUBLIC_BASE_URL")
+        .unwrap_or_else(|_| format!("http://127.0.0.1:{}", media_addr.port()));
+
     let mpd_output: Arc<dyn kanade_core::ports::AudioOutput> =
-        Arc::new(MpdRenderer::new(mpd_host.clone(), mpd_port));
+        Arc::new(MpdRenderer::new(
+            mpd_host.clone(),
+            mpd_port,
+            media_public_base_url,
+        ));
 
     let (ws_broadcaster, _ws_rx) = WsBroadcaster::new(64);
     let oh_broadcaster = OpenHomeBroadcaster::new();
@@ -43,7 +58,7 @@ async fn main() -> Result<()> {
 
     let core = Core::new(
         vec![("mpd".to_string(), mpd_output)],
-        broadcasters,
+        broadcasters.clone(),
     );
 
     let default_zone = Zone {
@@ -67,6 +82,7 @@ async fn main() -> Result<()> {
         mpd_port,
         MpdClient::new(mpd_host, mpd_port),
         core.state_handle(),
+        broadcasters.clone(),
     );
     tokio::spawn(async move {
         mpd_sync.run().await;
@@ -74,6 +90,11 @@ async fn main() -> Result<()> {
 
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "kanade.db".to_string());
     let _db = Arc::new(kanade_db::Database::open(&db_path)?);
+
+    let media_server = MediaServer::new(PathBuf::from(&db_path), media_addr);
+    tokio::spawn(async move {
+        media_server.run().await;
+    });
 
     let _scan_handle = if let Ok(music_dir) = std::env::var("MUSIC_DIR") {
         let scan_interval: u64 = std::env::var("SCAN_INTERVAL_SECS")

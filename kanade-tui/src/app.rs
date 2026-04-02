@@ -189,9 +189,15 @@ impl App {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
                     let zid = zone_id.clone();
+                    let cmd = match state.zone(&zone_id).map(|z| &z.status) {
+                        Some(kanade_core::model::PlaybackStatus::Playing) => {
+                            WsCommand::Pause { zone_id: zid.clone() }
+                        }
+                        _ => WsCommand::Play { zone_id: zid.clone() },
+                    };
                     tokio::spawn(async move {
                         let _ = tx
-                            .send(ClientMessage::Command(WsCommand::Play { zone_id: zid }))
+                            .send(ClientMessage::Command(cmd))
                             .await;
                     });
                 }

@@ -1,9 +1,8 @@
 use std::{collections::HashMap, time::Duration};
 
-use kanade_core::state::PlaybackState;
+use kanade_core::{model::PlaybackStatus, ports::EventBroadcaster, state::PlaybackState};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
     sync::RwLock,
     time::sleep,
 };
@@ -13,6 +12,7 @@ use crate::client::MpdClient;
 
 pub struct MpdStateSync {
     state: std::sync::Arc<RwLock<PlaybackState>>,
+    broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
     host: String,
     port: u16,
 }
@@ -23,9 +23,11 @@ impl MpdStateSync {
         port: u16,
         _client: MpdClient,
         state: std::sync::Arc<RwLock<PlaybackState>>,
+        broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
     ) -> Self {
         Self {
             state,
+            broadcasters,
             host: host.into(),
             port,
         }
@@ -64,43 +66,16 @@ impl MpdStateSync {
             .map_err(|e| format!("banner read: {e}"))?;
         info!("MPD sync connected: {banner:?}");
 
-        self.poll_status(&mut reader, &mut writer).await?;
-
         loop {
-            writer
-                .write_all(b"idle player mixer\n")
-                .await
-                .map_err(|e| format!("idle write: {e}"))?;
-
-            let mut changed = false;
-            loop {
-                let mut line = String::new();
-                reader
-                    .read_line(&mut line)
-                    .await
-                    .map_err(|e| format!("idle read: {e}"))?;
-                let trimmed = line.trim_end();
-                if trimmed == "OK" {
-                    break;
-                }
-                if trimmed.starts_with("ACK") {
-                    return Err(format!("MPD error: {trimmed}"));
-                }
-                if trimmed.starts_with("changed: ") {
-                    changed = true;
-                }
-            }
-
-            if changed {
-                self.poll_status(&mut reader, &mut writer).await?;
-            }
+            self.poll_status(&mut reader, &mut writer).await?;
+            sleep(Duration::from_millis(500)).await;
         }
     }
 
     async fn poll_status(
         &self,
-        reader: &mut BufReader<OwnedReadHalf>,
-        writer: &mut OwnedWriteHalf,
+        reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
     ) -> Result<(), String> {
         writer
             .write_all(b"status\n")
@@ -132,10 +107,22 @@ impl MpdStateSync {
             .get("elapsed")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
+        let playback_status = match map.get("state").map(String::as_str) {
+            Some("play") => PlaybackStatus::Playing,
+            Some("pause") => PlaybackStatus::Paused,
+            _ => PlaybackStatus::Stopped,
+        };
 
         let mut state = self.state.write().await;
         if let Some(zone) = state.zones.get_mut(0) {
             zone.position_secs = elapsed;
+            zone.status = playback_status;
+        }
+        let snapshot = state.clone();
+        drop(state);
+
+        for broadcaster in &self.broadcasters {
+            broadcaster.on_state_changed(&snapshot).await;
         }
 
         debug!("MPD sync: elapsed={elapsed:.1}");

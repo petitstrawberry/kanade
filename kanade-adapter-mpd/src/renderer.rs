@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tracing::instrument;
 
 use kanade_core::{error::CoreError, ports::AudioOutput};
+use sha2::{Digest, Sha256};
 
 use crate::client::MpdClient;
 
@@ -11,11 +12,31 @@ use crate::client::MpdClient;
 /// commands, which are sent over TCP.
 pub struct MpdRenderer {
     client: MpdClient,
+    media_public_base_url: String,
 }
 
 impl MpdRenderer {
-    pub fn new(host: impl Into<String>, port: u16) -> Self {
-        Self { client: MpdClient::new(host, port) }
+    pub fn new(host: impl Into<String>, port: u16, media_public_base_url: impl Into<String>) -> Self {
+        Self {
+            client: MpdClient::new(host, port),
+            media_public_base_url: media_public_base_url.into().trim_end_matches('/').to_string(),
+        }
+    }
+
+    fn media_uri(&self, value: &str) -> String {
+        if value.starts_with("http://") || value.starts_with("https://") {
+            return value.to_string();
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(value.as_bytes());
+        let track_id = hex::encode(hasher.finalize());
+        format!("{}/media/tracks/{}", self.media_public_base_url, track_id)
+    }
+
+    fn quote_mpd_arg(value: &str) -> String {
+        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
     }
 }
 
@@ -62,7 +83,8 @@ impl AudioOutput for MpdRenderer {
     async fn set_queue(&self, file_paths: &[String]) -> Result<(), CoreError> {
         let mut cmd = String::from("command_list_begin\nclear\n");
         for path in file_paths {
-            cmd.push_str(&format!("add {path}\n"));
+            let uri = self.media_uri(path);
+            cmd.push_str(&format!("add {}\n", Self::quote_mpd_arg(&uri)));
         }
         cmd.push_str("command_list_end\n");
         self.client.send(&cmd).await?;
@@ -74,7 +96,8 @@ impl AudioOutput for MpdRenderer {
     async fn add(&self, file_paths: &[String]) -> Result<(), CoreError> {
         let mut cmd = String::from("command_list_begin\n");
         for path in file_paths {
-            cmd.push_str(&format!("add {path}\n"));
+            let uri = self.media_uri(path);
+            cmd.push_str(&format!("add {}\n", Self::quote_mpd_arg(&uri)));
         }
         cmd.push_str("command_list_end\n");
         self.client.send(&cmd).await?;

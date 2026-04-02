@@ -4,7 +4,7 @@ use futures_util::{SinkExt, StreamExt};
 use kanade_db::Database;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{error, info, instrument, warn};
 
 use kanade_core::controller::Core;
 
@@ -85,7 +85,7 @@ async fn handle_connection(
                                 dispatch_command(cmd, &core).await;
                             }
                             Ok(ClientMessage::Request { req_id, req }) => {
-                                debug!("WS request from {peer}: {:?}", req);
+                                info!("WS request from {peer}: {:?}", req);
                                 let resp = handle_request(req, &core, &db_path).await;
                                 let msg = ServerMessage::Response { req_id, data: resp };
                                 if let Ok(json) = serde_json::to_string(&msg) {
@@ -126,7 +126,7 @@ async fn handle_connection(
 }
 
 async fn dispatch_command(cmd: WsCommand, core: &Core) {
-    debug!("WS command: {:?}", cmd);
+    info!("WS command: {:?}", cmd);
     let result = match cmd {
         WsCommand::Play { zone_id } => core.play_zone(&zone_id).await,
         WsCommand::Pause { zone_id } => core.pause_zone(&zone_id).await,

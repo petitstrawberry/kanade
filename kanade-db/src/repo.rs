@@ -124,6 +124,20 @@ impl Database {
         Ok(result)
     }
 
+    pub fn get_track_by_id(&self, track_id: &str) -> anyhow::Result<Option<Track>> {
+        let result = self
+            .conn
+            .query_row(
+                r#"SELECT file_path, id, title, track_number, duration_secs,
+                          format, sample_rate, artist, album_title, composer
+                   FROM tracks WHERE id = ?1"#,
+                params![track_id],
+                row_to_track,
+            )
+            .optional()?;
+        Ok(result)
+    }
+
     /// Fetch all tracks belonging to a given album directory.
     pub fn get_tracks_by_album_id(&self, album_id: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
