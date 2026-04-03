@@ -30,40 +30,37 @@ single shared state.
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Kanade Server                              │
-│                                                                    │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │                     kanade-core                           │    │
-│  │  PlaybackState · Nodes · Queue · Controller · Port traits │    │
-│  └──────┬──────────────────────────────────┬────────────────┘    │
-│         │                                  │                     │
-│  ┌──────▼──────────┐          ┌─────────────▼─────────────────┐  │
-│  │  kanade-db      │          │  kanade-scanner               │  │
-│  │  SQLite + FTS5  │          │  background scan loop         │  │
-│  └─────────────────┘          └───────────────────────────────┘  │
-│                                                                    │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │  kanade-adapter-node-server  (port 8082)                  │    │
-│  │  Accepts output nodes · Kanade Protocol (WS)              │    │
-│  └──────────────────────────────────────────────────────────┘    │
-│                                                                    │
-│  ┌────────────────────┐  ┌──────────────────┐  ┌───────────────┐ │
-│  │ kanade-adapter-ws  │  │ kanade-adapter-  │  │ kanade-server-│ │
-│  │ (WS client API)    │  │ openhome (UPnP)  │  │ http (media)  │ │
-│  │ :8080              │  │ :8090            │  │ :8081         │ │
-│  └────────────────────┘  └──────────────────┘  └───────────────┘ │
-└──────────────────────────────┬───────────────────────────────────┘
-                               │  Kanade Protocol (WS :8082)
-         ┌─────────────────────▼──────────────────────────────┐
-         │               kanade-node (output node)             │
-         │  kanade-adapter-mpd  →  MPD daemon (:6600)         │
-         └────────────────────────────────────────────────────┘
-                     │
-         ┌───────────▼──────────┐  ┌────────────┐  ┌─────────┐
-         │  kanade-web (Svelte) │  │ kanade-tui │  │ OpenHome│
-         │  (WS :8080)          │  │ (WS :8080) │  │ control │
-         └──────────────────────┘  └────────────┘  └─────────┘
+ ┌─────────────┐  ┌─────────────┐  ┌──────────────┐          ┌─────────────┐  ┌─────────────┐
+ │ kanade-web  │  │ kanade-tui  │  │ OpenHome     │          │ kanade-node │  │ kanade-node │
+ │ (WS :8080)  │  │ (WS :8080)  │  │ (SOAP :8090) │          │ (output)    │  │ (output)    │
+ └──────┬──────┘  └──────┬──────┘  └──────┬───────┘          │ MPD adapter │  │ MPD adapter │
+        │                │                │                   │     MPD     │  │     MPD     │
+        │                │                │                   └──────┬──────┘  └──────┬──────┘
+        │                │                │                          │                │
+        └────────────────┴────────────────┴──────────┐    ┌─────────┴────────────────┘
+                                                    │    │
+                                              ┌─────▼────▼─────┐
+                                              │ Kanade Server  │
+                                              │               │
+                                              │ ┌───────────┐ │
+                                              │ │ kanade-core│ │
+                                              │ │ State      │ │
+                                              │ │ Queue      │ │
+                                              │ │ Controller │ │
+                                              │ └───────────┘ │
+                                              │ ┌───────────┐ │
+                                              │ │ kanade-db  │ │
+                                              │ │ SQLite+FTS5│ │
+                                              │ └───────────┘ │
+                                              │ ┌───────────┐ │
+                                              │ │ scanner   │ │
+                                              │ └───────────┘ │
+                                              └───────────────┘
+
+  WS :8080   Client Subprotocol   (server ↔ web, tui)
+  WS :8082   Node Subprotocol      (server ↔ output nodes)
+  HTTP :8081 Media Surface         (track streaming + artwork)
+  HTTP :8090 OpenHome / UPnP       (external control points)
 ```
 
 See [DESIGN.md](DESIGN.md) for detailed design decisions and data flow.
