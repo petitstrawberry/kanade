@@ -50,6 +50,7 @@ fn extract_dsf_track(path: &str) -> Result<Track> {
         file_path: path.to_string(),
         title: None,
         track_number: None,
+        disc_number: None,
         duration_secs,
         format,
         sample_rate: Some(sample_rate),
@@ -70,6 +71,10 @@ fn extract_dsf_track(path: &str) -> Result<Track> {
             .map(|s: &str| s.to_string());
         track.album_title = tag.album().map(|s| s.to_string());
         track.track_number = tag.track();
+        track.disc_number = tag
+            .get("TPOS")
+            .and_then(|f| f.content().text())
+            .and_then(|s: &str| s.parse::<u32>().ok());
         track.composer = tag
             .get("TCOM")
             .and_then(|f| f.content().text())
@@ -127,6 +132,7 @@ fn extract_lofty_track(path: &str) -> Result<Track> {
     let genre = tag_string(tag, &ItemKey::Genre);
 
     let track_number = tag_string(tag, &ItemKey::TrackNumber).and_then(|s| s.parse::<u32>().ok());
+    let disc_number = tag_string(tag, &ItemKey::DiscNumber).and_then(|s| s.parse::<u32>().ok());
 
     let duration_secs = props.duration().as_secs_f64();
     let duration_secs = if duration_secs > 0.0 {
@@ -142,6 +148,7 @@ fn extract_lofty_track(path: &str) -> Result<Track> {
         file_path: path.to_string(),
         title,
         track_number,
+        disc_number,
         duration_secs,
         format,
         sample_rate,

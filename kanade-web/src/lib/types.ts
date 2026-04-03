@@ -10,6 +10,7 @@ export interface Track {
   composer: string | null;
   genre: string | null;
   track_number: number | null;
+  disc_number: number | null;
   duration_secs: number | null;
   format: string | null;
   sample_rate: number | null;

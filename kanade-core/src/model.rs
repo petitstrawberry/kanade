@@ -13,6 +13,7 @@ pub struct Track {
     pub composer: Option<String>,
     pub genre: Option<String>,
     pub track_number: Option<u32>,
+    pub disc_number: Option<u32>,
     pub duration_secs: Option<f64>,
     pub format: Option<String>,
     pub sample_rate: Option<u32>,

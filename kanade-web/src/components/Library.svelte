@@ -19,6 +19,10 @@
   
   let currentTracks = $state<Track[]>([]);
 
+  const hasMultipleDiscs = $derived(
+    new Set(currentTracks.map(t => t.disc_number ?? 0)).size > 1
+  );
+
   function cycleMode(reverse: boolean) {
     const modes: Mode[] = ['albums', 'artists', 'genres'];
     const idx = modes.indexOf(mode);
@@ -211,11 +215,14 @@
             </div>
           </div>
           <div class="track-list">
-            {#each currentTracks as track}
+            {#each currentTracks as track, i}
+              {#if hasMultipleDiscs && (i === 0 || track.disc_number !== currentTracks[i - 1].disc_number)}
+                <div class="disc-separator">Disc {track.disc_number ?? 1}</div>
+              {/if}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div class="track-item" ondblclick={() => playNow(track)} onclick={() => addToQueue(track)}>
-                <div class="track-number">{track.track_number || '-'}</div>
+                <div class="track-number">{track.track_number ?? '-'}</div>
                 <div class="track-info">
                   <div class="title">{track.title || track.file_path.split('/').pop()}</div>
                   {#if track.artist && track.artist !== track.album_artist}
@@ -450,6 +457,15 @@
     color: var(--comment);
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .disc-separator {
+    padding: 8px 12px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent);
   }
 
   .track-info {

@@ -615,6 +615,7 @@ mod tests {
             composer: None,
             genre: None,
             track_number: None,
+            disc_number: None,
             duration_secs: None,
             format: None,
             sample_rate: None,

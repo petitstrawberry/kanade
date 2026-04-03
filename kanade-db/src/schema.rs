@@ -12,7 +12,7 @@ use rusqlite::{Connection, Result};
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
 /// Schema version. Increment when adding columns or tables.
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     album_id      TEXT REFERENCES albums(id) ON DELETE SET NULL,
     title         TEXT,
     track_number  INTEGER,
+    disc_number   INTEGER,
     duration_secs REAL,
     format        TEXT,
     sample_rate   INTEGER,
@@ -132,6 +133,13 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "4",
         r#"
             ALTER TABLE albums ADD COLUMN artwork_path TEXT;
+            UPDATE tracks SET mtime = NULL;
+        "#,
+    ),
+    (
+        "5",
+        r#"
+            ALTER TABLE tracks ADD COLUMN disc_number INTEGER;
             UPDATE tracks SET mtime = NULL;
         "#,
     ),

@@ -64,14 +64,15 @@ impl Database {
 
         self.conn.execute(
             r#"INSERT INTO tracks
-               (file_path, id, album_id, title, track_number, duration_secs,
+               (file_path, id, album_id, title, track_number, disc_number, duration_secs,
                 format, sample_rate, artist, album_artist, album_title, composer, genre, mtime)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                ON CONFLICT(file_path) DO UPDATE SET
                    id            = excluded.id,
                    album_id      = excluded.album_id,
                    title         = excluded.title,
                    track_number  = excluded.track_number,
+                   disc_number   = excluded.disc_number,
                    duration_secs = excluded.duration_secs,
                    format        = excluded.format,
                    sample_rate   = excluded.sample_rate,
@@ -87,6 +88,7 @@ impl Database {
                 album_id,
                 track.title,
                 track.track_number,
+                track.disc_number,
                 track.duration_secs,
                 track.format,
                 track.sample_rate,
@@ -119,7 +121,7 @@ impl Database {
         let result = self
             .conn
             .query_row(
-                 r#"SELECT file_path, id, title, track_number, duration_secs,
+                 r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
                            format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
                     FROM tracks WHERE file_path = ?1"#,
                  params![file_path],
@@ -133,7 +135,7 @@ impl Database {
         let result = self
             .conn
             .query_row(
-                r#"SELECT file_path, id, title, track_number, duration_secs,
+                r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
                            format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
                     FROM tracks WHERE id = ?1"#,
                 params![track_id],
@@ -146,10 +148,10 @@ impl Database {
     /// Fetch all tracks belonging to a given album directory.
     pub fn get_tracks_by_album_id(&self, album_id: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT file_path, id, title, track_number, duration_secs,
+            r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
                       format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
                 FROM tracks WHERE album_id = ?1
-                ORDER BY track_number, title"#,
+                 ORDER BY disc_number, track_number, title"#,
         )?;
         let rows = stmt.query_map(params![album_id], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -216,7 +218,11 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_album_artwork(&self, dir_path: &str, artwork_path: Option<&str>) -> anyhow::Result<()> {
+    pub fn update_album_artwork(
+        &self,
+        dir_path: &str,
+        artwork_path: Option<&str>,
+    ) -> anyhow::Result<()> {
         self.conn.execute(
             "UPDATE albums SET artwork_path = ?1 WHERE dir_path = ?2",
             params![artwork_path, dir_path],
@@ -326,9 +332,9 @@ impl Database {
         }
         let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
         let sql = format!(
-            r#"SELECT file_path, id, title, track_number, duration_secs,
+            r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
                       format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
-                FROM tracks WHERE id IN ({}) ORDER BY file_path"#,
+                FROM tracks WHERE id IN ({}) ORDER BY album_title, disc_number, track_number, title"#,
             placeholders.join(",")
         );
         let params: Vec<&dyn rusqlite::types::ToSql> = ids
@@ -359,10 +365,10 @@ impl Database {
 
     pub fn get_tracks_by_artist(&self, artist: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT file_path, id, title, track_number, duration_secs,
+            r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
                       format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
                 FROM tracks WHERE artist = ?1 OR album_artist = ?1
-                ORDER BY album_title, track_number, title"#,
+                 ORDER BY album_title, disc_number, track_number, title"#,
         )?;
         let rows = stmt.query_map(params![artist], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -403,10 +409,10 @@ impl Database {
     /// Fetch all tracks by a given genre name.
     pub fn get_tracks_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Track>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT file_path, id, title, track_number, duration_secs,
+            r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
                       format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
                 FROM tracks WHERE genre = ?1
-               ORDER BY artist, album_title, track_number, title"#,
+                ORDER BY artist, album_title, disc_number, track_number, title"#,
         )?;
         let rows = stmt.query_map(params![genre], row_to_track)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -457,17 +463,18 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
     Ok(Track {
         file_path: row.get(0)?,
         id: row.get(1)?,
-        album_id: row.get(12)?,
+        album_id: row.get(13)?,
         title: row.get(2)?,
         track_number: row.get(3)?,
-        duration_secs: row.get(4)?,
-        format: row.get(5)?,
-        sample_rate: row.get(6)?,
-        artist: row.get(7)?,
-        album_artist: row.get(8)?,
-        album_title: row.get(9)?,
-        composer: row.get(10)?,
-        genre: row.get(11)?,
+        disc_number: row.get(4)?,
+        duration_secs: row.get(5)?,
+        format: row.get(6)?,
+        sample_rate: row.get(7)?,
+        artist: row.get(8)?,
+        album_artist: row.get(9)?,
+        album_title: row.get(10)?,
+        composer: row.get(11)?,
+        genre: row.get(12)?,
     })
 }
 
@@ -487,6 +494,7 @@ mod tests {
             album_id: None,
             title: Some("Test Track".to_string()),
             track_number: Some(1),
+            disc_number: None,
             duration_secs: Some(180.0),
             format: Some("FLAC".to_string()),
             sample_rate: Some(44100),
