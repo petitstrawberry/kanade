@@ -51,7 +51,7 @@ pub enum PlaybackStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Zone {
+pub struct Node {
     pub id: String,
     pub name: String,
     pub output_ids: Vec<String>,
@@ -64,7 +64,7 @@ pub struct Zone {
     pub repeat: RepeatMode,
 }
 
-impl Zone {
+impl Node {
     pub fn current_track(&self) -> Option<&Track> {
         self.current_index.and_then(|i| self.queue.get(i))
     }

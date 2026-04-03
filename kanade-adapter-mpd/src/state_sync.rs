@@ -137,21 +137,21 @@ impl MpdStateSync {
         let current_gen = self.queue_generation.load(Ordering::Relaxed);
 
         let mut state = self.state.write().await;
-        if let Some(zone) = state.zones.get_mut(0) {
-            zone.position_secs = elapsed;
-            zone.status = playback_status;
-            zone.volume = volume;
+        if let Some(node) = state.nodes.get_mut(0) {
+            node.position_secs = elapsed;
+            node.status = playback_status;
+            node.volume = volume;
 
             if current_gen != self.last_generation {
                 self.last_generation = current_gen;
-                self.base_core_index = zone.current_index.unwrap_or(0);
+                self.base_core_index = node.current_index.unwrap_or(0);
                 self.last_mpd_song = Some(0);
             } else if let Some(song_idx) = song {
                 if self.last_mpd_song != Some(song_idx) {
                     let new_core_index = self.base_core_index
                         .saturating_add(song_idx);
-                    zone.current_index = Some(new_core_index);
-                    zone.position_secs = 0.0;
+                    node.current_index = Some(new_core_index);
+                    node.position_secs = 0.0;
                     self.last_mpd_song = Some(song_idx);
                 }
             }

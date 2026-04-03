@@ -26,7 +26,7 @@ pub async fn run(
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(ws_tx.clone());
-    let mut state = PlaybackState { zones: vec![] };
+    let mut state = PlaybackState { nodes: vec![] };
 
     loop {
         terminal.draw(|f| ui::draw(f, &app, &state))?;

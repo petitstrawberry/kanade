@@ -12,7 +12,7 @@ use kanade_core::error::CoreError;
 ///
 /// Opens a new TCP connection per command batch.  This is intentionally simple
 /// and avoids connection-pool complexity while remaining correct for a
-/// single-user, single-zone audio player.
+/// single-user, single-node audio player.
 pub struct MpdClient {
     host: String,
     port: u16,

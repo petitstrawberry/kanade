@@ -104,7 +104,7 @@ pub struct App {
     pub library_level: u8,
     pub library_selected_artist: Option<String>,
     pub library_selected_genre: Option<String>,
-    pub active_zone_id: String,
+    pub active_node_id: String,
     pub req_counter: u64,
     pub in_search_input: bool,
 }
@@ -141,7 +141,7 @@ impl App {
             library_level: 0,
             library_selected_artist: None,
             library_selected_genre: None,
-            active_zone_id: "default".to_string(),
+            active_node_id: "default".to_string(),
             req_counter: 1,
             in_search_input: false,
         }
@@ -448,7 +448,7 @@ impl App {
 
     pub async fn handle_event(&mut self, event: AppEvent, state: &PlaybackState) {
         let AppEvent::Key(key) = event;
-        let zone_id = self.active_zone_id.clone();
+        let node_id = self.active_node_id.clone();
 
         if self.active_panel == Panel::Search && self.in_search_input {
             match key.code {
@@ -514,12 +514,12 @@ impl App {
             KeyCode::Char(' ') => {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
-                    let zid = zone_id.clone();
-                    let cmd = match state.zone(&zone_id).map(|z| &z.status) {
+                    let nid = node_id.clone();
+                    let cmd = match state.node(&node_id).map(|n| &n.status) {
                         Some(kanade_core::model::PlaybackStatus::Playing) => {
-                            WsCommand::Pause { zone_id: zid.clone() }
+                            WsCommand::Pause { node_id: nid.clone() }
                         }
-                        _ => WsCommand::Play { zone_id: zid.clone() },
+                        _ => WsCommand::Play { node_id: nid.clone() },
                     };
                     tokio::spawn(async move {
                         let _ = tx.send(ClientMessage::Command(cmd)).await;
@@ -529,39 +529,39 @@ impl App {
             KeyCode::Char('n') => {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
-                    let zid = zone_id.clone();
+                    let nid = node_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::Next { zone_id: zid })).await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Next { node_id: nid })).await;
                     });
                 }
             }
             KeyCode::Char('p') => {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
-                    let zid = zone_id.clone();
+                    let nid = node_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::Previous { zone_id: zid })).await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Previous { node_id: nid })).await;
                     });
                 }
             }
             KeyCode::Char('s') => {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
-                    let zid = zone_id.clone();
+                    let nid = node_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::Stop { zone_id: zid })).await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Stop { node_id: nid })).await;
                     });
                 }
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
                 if self.active_panel != Panel::Search {
-                    if let Some(zone) = state.zone(&zone_id) {
-                        let vol = zone.volume.saturating_add(5).min(100);
+                    if let Some(node) = state.node(&node_id) {
+                        let vol = node.volume.saturating_add(5).min(100);
                         let tx = self.ws_tx.clone();
-                        let zid = zone_id.clone();
+                        let nid = node_id.clone();
                         tokio::spawn(async move {
                             let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume {
-                                zone_id: zid, volume: vol,
+                                node_id: nid, volume: vol,
                             })).await;
                         });
                     }
@@ -569,13 +569,13 @@ impl App {
             }
             KeyCode::Char('-') => {
                 if self.active_panel != Panel::Search {
-                    if let Some(zone) = state.zone(&zone_id) {
-                        let vol = zone.volume.saturating_sub(5);
+                    if let Some(node) = state.node(&node_id) {
+                        let vol = node.volume.saturating_sub(5);
                         let tx = self.ws_tx.clone();
-                        let zid = zone_id.clone();
+                        let nid = node_id.clone();
                         tokio::spawn(async move {
                             let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume {
-                                zone_id: zid, volume: vol,
+                                node_id: nid, volume: vol,
                             })).await;
                         });
                     }
@@ -676,8 +676,8 @@ impl App {
     fn select_next(&self, state: &PlaybackState) {
         match self.active_panel {
             Panel::Queue => {
-                let len = state.zone(&self.active_zone_id)
-                    .map(|z| z.queue.len())
+                let len = state.node(&self.active_node_id)
+                    .map(|n| n.queue.len())
                     .unwrap_or(0);
                 let mut list = self.queue_list.borrow_mut();
                 let cur = list.selected().unwrap_or(0);
@@ -724,15 +724,15 @@ impl App {
     fn queue_remove(&self, state: &PlaybackState) {
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
-            let queue_len = state.zone(&self.active_zone_id)
-                .map(|z| z.queue.len())
+            let queue_len = state.node(&self.active_node_id)
+                .map(|n| n.queue.len())
                 .unwrap_or(0);
             if i < queue_len {
                 let tx = self.ws_tx.clone();
-                let zid = self.active_zone_id.clone();
+                let nid = self.active_node_id.clone();
                 tokio::spawn(async move {
                     let _ = tx.send(ClientMessage::Command(WsCommand::RemoveFromQueue {
-                        zone_id: zid, index: i,
+                        node_id: nid, index: i,
                     })).await;
                 });
             }
@@ -745,15 +745,15 @@ impl App {
             if i == 0 {
                 return;
             }
-            let queue_len = state.zone(&self.active_zone_id)
-                .map(|z| z.queue.len())
+            let queue_len = state.node(&self.active_node_id)
+                .map(|n| n.queue.len())
                 .unwrap_or(0);
             if i < queue_len {
                 let tx = self.ws_tx.clone();
-                let zid = self.active_zone_id.clone();
+                let nid = self.active_node_id.clone();
                 tokio::spawn(async move {
                     let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
-                        zone_id: zid, from: i, to: i - 1,
+                        node_id: nid, from: i, to: i - 1,
                     })).await;
                 });
                 let _ = idx;
@@ -765,17 +765,17 @@ impl App {
     fn queue_move_down(&self, state: &PlaybackState) {
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
-            let queue_len = state.zone(&self.active_zone_id)
-                .map(|z| z.queue.len())
+            let queue_len = state.node(&self.active_node_id)
+                .map(|n| n.queue.len())
                 .unwrap_or(0);
             if i + 1 >= queue_len {
                 return;
             }
             let tx = self.ws_tx.clone();
-            let zid = self.active_zone_id.clone();
+            let nid = self.active_node_id.clone();
             tokio::spawn(async move {
                 let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
-                    zone_id: zid, from: i, to: i + 1,
+                    node_id: nid, from: i, to: i + 1,
                 })).await;
             });
             let _ = idx;
@@ -784,7 +784,7 @@ impl App {
     }
 
     async fn select_item(&mut self, _state: &PlaybackState) {
-        let zone_id = self.active_zone_id.clone();
+        let node_id = self.active_node_id.clone();
 
         match self.active_panel {
             Panel::Library => {
@@ -795,7 +795,7 @@ impl App {
                             let tx = self.ws_tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                    zone_id, track,
+                                    node_id, track,
                                 })).await;
                             });
                         }
@@ -811,7 +811,7 @@ impl App {
                         let tx = self.ws_tx.clone();
                         tokio::spawn(async move {
                             let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                zone_id, track,
+                                node_id, track,
                             })).await;
                         });
                     }
@@ -823,7 +823,7 @@ impl App {
                     let tx = self.ws_tx.clone();
                     tokio::spawn(async move {
                         let _ = tx.send(ClientMessage::Command(WsCommand::PlayIndex {
-                            zone_id, index: i,
+                            node_id, index: i,
                         })).await;
                     });
                 }

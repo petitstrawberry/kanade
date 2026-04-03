@@ -128,21 +128,21 @@ async fn handle_connection(
 async fn dispatch_command(cmd: WsCommand, core: &Core) {
     info!("WS command: {:?}", cmd);
     let result = match cmd {
-        WsCommand::Play { zone_id } => core.play_zone(&zone_id).await,
-        WsCommand::Pause { zone_id } => core.pause_zone(&zone_id).await,
-        WsCommand::Stop { zone_id } => core.stop_zone(&zone_id).await,
-        WsCommand::Next { zone_id } => core.next_zone(&zone_id).await,
-        WsCommand::Previous { zone_id } => core.previous_zone(&zone_id).await,
-        WsCommand::Seek { zone_id, position_secs } => core.seek_zone(&zone_id, position_secs).await,
-        WsCommand::SetVolume { zone_id, volume } => core.set_zone_volume(&zone_id, volume).await,
-        WsCommand::SetRepeat { zone_id, repeat } => core.set_zone_repeat(&zone_id, repeat).await,
-        WsCommand::SetShuffle { zone_id, shuffle } => core.set_zone_shuffle(&zone_id, shuffle).await,
-        WsCommand::AddToQueue { zone_id, track } => core.add_to_zone_queue(&zone_id, track).await,
-        WsCommand::AddTracksToQueue { zone_id, tracks } => core.add_tracks_to_zone_queue(&zone_id, tracks).await,
-        WsCommand::PlayIndex { zone_id, index } => core.play_zone_index(&zone_id, index).await,
-        WsCommand::RemoveFromQueue { zone_id, index } => core.remove_from_zone_queue(&zone_id, index).await,
-        WsCommand::MoveInQueue { zone_id, from, to } => core.move_in_zone_queue(&zone_id, from, to).await,
-        WsCommand::ClearQueue { zone_id } => core.clear_zone_queue(&zone_id).await,
+        WsCommand::Play { node_id } => core.play_node(&node_id).await,
+        WsCommand::Pause { node_id } => core.pause_node(&node_id).await,
+        WsCommand::Stop { node_id } => core.stop_node(&node_id).await,
+        WsCommand::Next { node_id } => core.next_node(&node_id).await,
+        WsCommand::Previous { node_id } => core.previous_node(&node_id).await,
+        WsCommand::Seek { node_id, position_secs } => core.seek_node(&node_id, position_secs).await,
+        WsCommand::SetVolume { node_id, volume } => core.set_node_volume(&node_id, volume).await,
+        WsCommand::SetRepeat { node_id, repeat } => core.set_node_repeat(&node_id, repeat).await,
+        WsCommand::SetShuffle { node_id, shuffle } => core.set_node_shuffle(&node_id, shuffle).await,
+        WsCommand::AddToQueue { node_id, track } => core.add_to_node_queue(&node_id, track).await,
+        WsCommand::AddTracksToQueue { node_id, tracks } => core.add_tracks_to_node_queue(&node_id, tracks).await,
+        WsCommand::PlayIndex { node_id, index } => core.play_node_index(&node_id, index).await,
+        WsCommand::RemoveFromQueue { node_id, index } => core.remove_from_node_queue(&node_id, index).await,
+        WsCommand::MoveInQueue { node_id, from, to } => core.move_in_node_queue(&node_id, from, to).await,
+        WsCommand::ClearQueue { node_id } => core.clear_node_queue(&node_id).await,
     };
     if let Err(e) = result {
         warn!("WS dispatch error: {e}");
@@ -227,13 +227,13 @@ async fn handle_request(
             }).await.unwrap_or(None).unwrap_or_default();
             WsResponse::SearchResults { tracks }
         }
-        WsRequest::GetQueue { zone_id } => {
+        WsRequest::GetQueue { node_id } => {
             let state = core.state_handle();
             let s = state.read().await;
-            match s.zone(&zone_id) {
-                Some(zone) => WsResponse::Queue {
-                    tracks: zone.queue.clone(),
-                    current_index: zone.current_index,
+            match s.node(&node_id) {
+                Some(node) => WsResponse::Queue {
+                    tracks: node.queue.clone(),
+                    current_index: node.current_index,
                 },
                 None => WsResponse::Queue {
                     tracks: vec![],

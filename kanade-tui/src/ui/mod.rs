@@ -62,9 +62,9 @@ fn render_tabs(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 fn render_queue(f: &mut Frame, area: ratatui::layout::Rect, app: &App, state: &PlaybackState) {
-    let zone = state.zone(&app.active_zone_id);
-    let queue = zone.map(|z| z.queue.as_slice()).unwrap_or(&[]);
-    let current_index = zone.and_then(|z| z.current_index);
+    let node = state.node(&app.active_node_id);
+    let queue = node.map(|n| n.queue.as_slice()).unwrap_or(&[]);
+    let current_index = node.and_then(|n| n.current_index);
 
     let items: Vec<ListItem> = queue
         .iter()
