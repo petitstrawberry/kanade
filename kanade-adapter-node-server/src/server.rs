@@ -94,8 +94,15 @@ async fn handle_node_connection(
         }
     };
 
-    // ── Assign a server-generated UUID as the node identifier ────────────────
-    let node_id = Uuid::new_v4().to_string();
+    // ── Assign node identifier: first node gets "default", rest get UUIDs ───
+    let state_handle = core.state_handle();
+    let state = state_handle.read().await;
+    let node_id = if state.nodes.is_empty() {
+        "default".to_string()
+    } else {
+        Uuid::new_v4().to_string()
+    };
+    drop(state);
 
     info!(
         "Output node registered: name={}, assigned id={}",
