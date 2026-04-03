@@ -42,12 +42,12 @@ fn extract_dsf_picture(file_path: &str) -> Option<lofty::picture::Picture> {
 
     let mut f = std::fs::File::open(file_path).ok()?;
 
-    // DSF format: "DSD " chunk (12 bytes) → "fmt " chunk (variable) → ID3v2 tag
-    f.seek(SeekFrom::Start(12)).ok()?;
-    let mut fmt_size_buf = [0u8; 8];
-    f.read_exact(&mut fmt_size_buf).ok()?;
-    let fmt_chunk_size = u64::from_le_bytes(fmt_size_buf);
-    let id3_offset = 12 + fmt_chunk_size as u64;
+    // DSF format: DSD chunk (12 header + 28 body) → fmt → data → ... → ID3v2
+    // DSD body bytes 8-15 (file offset 20-27): metadata offset pointer to ID3v2 tag
+    f.seek(SeekFrom::Start(20)).ok()?;
+    let mut buf = [0u8; 8];
+    f.read_exact(&mut buf).ok()?;
+    let id3_offset = u64::from_le_bytes(buf);
 
     f.seek(SeekFrom::Start(id3_offset)).ok()?;
     let mut header = [0u8; 3];
@@ -55,6 +55,7 @@ fn extract_dsf_picture(file_path: &str) -> Option<lofty::picture::Picture> {
     if &header != b"ID3" {
         return None;
     }
+    f.seek(SeekFrom::Start(id3_offset)).ok()?;
 
     let id3_data = {
         let mut buf = Vec::new();
