@@ -244,4 +244,40 @@
     color: var(--bg);
     transform: scale(1.1);
   }
+
+  @media (max-width: 768px) {
+    .search-panel {
+      padding: 12px;
+    }
+
+    .header {
+      margin-bottom: 12px;
+    }
+
+    .search-input {
+      padding: 12px 16px;
+      font-size: 16px;
+      min-height: 44px;
+    }
+
+    .track-item {
+      padding: 8px;
+      gap: 12px;
+      min-height: 44px;
+    }
+
+    .track-actions {
+      opacity: 1;
+    }
+
+    .add-btn {
+      width: 44px;
+      height: 44px;
+      opacity: 1;
+    }
+
+    .track-item:hover .add-btn {
+      transform: none;
+    }
+  }
 </style>

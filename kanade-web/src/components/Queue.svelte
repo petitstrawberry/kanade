@@ -246,4 +246,25 @@
     text-align: center;
     color: var(--comment);
   }
+
+  @media (max-width: 768px) {
+    .queue-panel {
+      padding: 12px;
+    }
+
+    .track-item {
+      padding: 8px;
+      gap: 12px;
+      min-height: 44px;
+    }
+
+    .controls {
+      opacity: 1;
+    }
+
+    .icon-btn {
+      min-width: 44px;
+      min-height: 44px;
+    }
+  }
 </style>

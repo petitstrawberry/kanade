@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { ws } from '../lib/stores';
+  import { ws, mediaBase } from '../lib/stores';
   import { formatDuration } from '../lib/format';
+
+  let { onOpenNowPlaying }: { onOpenNowPlaying: () => void } = $props();
 
   let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
   let currentTrack = $derived(node?.queue[node.current_index ?? -1]);
+  let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
   let isPlaying = $derived(node?.status === 'playing');
   let position = $derived(node?.position_secs ?? 0);
   let duration = $derived(currentTrack?.duration_secs ?? 0);
@@ -54,13 +57,20 @@
   }
 </script>
 
-<div class="transport-bar">
-  <div class="track-info">
-    {#if currentTrack}
-      <div class="title">{currentTrack.title || currentTrack.file_path.split('/').pop()}</div>
-      <div class="artist">{currentTrack.artist || 'Unknown Artist'}</div>
-    {/if}
-  </div>
+  <div class="transport-bar">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="track-info" class:clickable={!!currentTrack} onclick={() => { if (currentTrack) onOpenNowPlaying(); }}>
+      {#if currentTrack}
+        <div class="track-artwork">
+            <img src={artworkUrl} alt="" onerror={(e) => (e.currentTarget.style.display = 'none')} />
+        </div>
+        <div class="track-text">
+          <div class="title">{currentTrack.title || currentTrack.file_path.split('/').pop()}</div>
+          <div class="artist">{currentTrack.artist || 'Unknown Artist'}</div>
+        </div>
+      {/if}
+    </div>
 
   <div class="controls-center">
     <div class="buttons">
@@ -118,11 +128,44 @@
   .track-info {
     width: 250px;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: 10px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    border-radius: 6px;
+    padding: 6px;
+    margin-left: -6px;
+    transition: background-color 0.2s;
+  }
+
+  .track-artwork {
+    width: 40px;
+    height: 40px;
+    border-radius: 4px;
+    background: var(--bg-dark);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .track-artwork img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .track-text {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .track-info.clickable {
+    cursor: pointer;
+  }
+
+  .track-info.clickable:hover {
+    background-color: var(--bg-highlight);
   }
 
   .title {
@@ -231,5 +274,44 @@
   input[type=range] {
     width: 100px;
     accent-color: var(--accent);
+  }
+
+  @media (max-width: 768px) {
+    .transport-bar {
+      flex-direction: row;
+      padding: 0 12px;
+      height: 56px;
+    }
+
+    .track-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .track-artwork {
+      width: 36px;
+      height: 36px;
+    }
+
+    .controls-center {
+      display: none;
+    }
+
+    .progress-container {
+      display: none;
+    }
+
+    .controls-right {
+      display: none;
+    }
+  }
+
+  @media (min-width: 769px) and (max-width: 1024px) {
+    .track-info {
+      width: 180px;
+    }
+    .controls-right {
+      width: 180px;
+    }
   }
 </style>

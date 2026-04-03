@@ -7,7 +7,7 @@ export const mediaBase = params.get('media') || 'http://127.0.0.1:8081';
 export const ws = new WsClient(wsUrl);
 
 export class ActiveTab {
-  value = $state<'now-playing' | 'library' | 'queue' | 'search'>('now-playing');
+  value = $state<'library' | 'queue' | 'search'>('library');
 }
 
 export type Toast = { message: string; id: number };

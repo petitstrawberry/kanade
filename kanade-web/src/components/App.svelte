@@ -11,6 +11,7 @@
   const activeTab = new ActiveTab();
   let tab = $derived(activeTab.value);
   let connected = $derived(ws.connected);
+  let showNowPlaying = $state(false);
 
   onMount(() => {
     ws.connect();
@@ -35,10 +36,10 @@
         e.preventDefault();
         activeTab.value = 'search';
         setTimeout(() => document.querySelector('input')?.focus(), 10);
-      } else if (e.key === '1') activeTab.value = 'now-playing';
-      else if (e.key === '2') activeTab.value = 'library';
-      else if (e.key === '3') activeTab.value = 'queue';
-      else if (e.key === '4') activeTab.value = 'search';
+      } else if (e.key === '1') activeTab.value = 'library';
+      else if (e.key === '2') activeTab.value = 'queue';
+      else if (e.key === '3') activeTab.value = 'search';
+      else if (e.key === 'Escape' && showNowPlaying) showNowPlaying = false;
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -55,9 +56,6 @@
       {connected ? 'Connected' : 'Connecting...'}
     </div>
 
-    <button class:active={tab === 'now-playing'} onclick={() => activeTab.value = 'now-playing'}>
-      Now Playing
-    </button>
     <button class:active={tab === 'library'} onclick={() => activeTab.value = 'library'}>
       Library
     </button>
@@ -70,15 +68,31 @@
   </nav>
 
   <main class="content">
-    <div class="tab-panel" class:visible={tab === 'now-playing'}><NowPlaying /></div>
     <div class="tab-panel" class:visible={tab === 'library'}><Library /></div>
     <div class="tab-panel" class:visible={tab === 'queue'}><Queue /></div>
     <div class="tab-panel" class:visible={tab === 'search'}><Search /></div>
   </main>
 
   <div class="transport">
-    <TransportBar />
+    <TransportBar onOpenNowPlaying={() => showNowPlaying = true} />
   </div>
+
+  <NowPlaying visible={showNowPlaying} onClose={() => showNowPlaying = false} />
+
+  <nav class="bottom-tab-bar">
+    <button class:active={tab === 'library'} onclick={() => activeTab.value = 'library'}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+      <span>Library</span>
+    </button>
+    <button class:active={tab === 'queue'} onclick={() => activeTab.value = 'queue'}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+      <span>Queue</span>
+    </button>
+    <button class:active={tab === 'search'} onclick={() => activeTab.value = 'search'}>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span>Search</span>
+    </button>
+  </nav>
 
   <div class="toast-container">
     {#each toasts as toast (toast.id)}
@@ -196,5 +210,79 @@
     border-radius: 6px;
     font-size: 13px;
     white-space: nowrap;
+  }
+
+  .bottom-tab-bar {
+    display: none;
+    grid-column: 1 / -1;
+    background-color: var(--bg-dark);
+    border-top: 1px solid var(--bg-highlight);
+    z-index: 20;
+    justify-content: space-around;
+    padding: 8px 0;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+
+  .bottom-tab-bar button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    color: var(--comment);
+    background: transparent;
+    border-radius: 0;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .bottom-tab-bar button:hover {
+    background: transparent;
+    color: var(--fg);
+  }
+
+  .bottom-tab-bar button.active {
+    background: transparent;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .bottom-tab-bar span {
+    font-size: 10px;
+  }
+
+  @media (max-width: 768px) {
+    .app-layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr auto auto;
+    }
+
+    .sidebar {
+      display: none;
+    }
+
+    .transport {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
+
+    .bottom-tab-bar {
+      display: flex;
+      grid-row: 3;
+    }
+
+    .toast-container {
+      bottom: 150px;
+    }
+  }
+
+  @media (min-width: 769px) and (max-width: 1024px) {
+    .app-layout {
+      grid-template-columns: 160px 1fr;
+    }
+    
+    .sidebar {
+      padding: 16px 12px;
+    }
   }
 </style>

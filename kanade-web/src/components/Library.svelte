@@ -661,4 +661,76 @@
     color: var(--bg);
     transform: scale(1.1);
   }
+
+  @media (max-width: 768px) {
+    .library-panel {
+      padding: 12px;
+    }
+
+    .album-grid {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 16px;
+    }
+
+    .grid-list {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    }
+
+    .mode-switcher button {
+      min-height: 44px;
+    }
+
+    .back-btn {
+      min-height: 44px;
+    }
+
+    .list-item {
+      min-height: 44px;
+      padding: 12px;
+    }
+
+    .tracks-header {
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .album-actions {
+      justify-content: center;
+    }
+
+    .action-btn {
+      min-height: 44px;
+      min-width: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .track-item {
+      padding: 8px;
+      gap: 12px;
+      min-height: 44px;
+    }
+
+    .track-actions {
+      opacity: 1;
+    }
+
+    .add-btn {
+      opacity: 1;
+      width: 44px;
+      height: 44px;
+    }
+
+    .track-item:hover .add-btn {
+      transform: none;
+    }
+  }
+
+  @media (min-width: 769px) and (max-width: 1024px) {
+    .album-grid {
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    }
+  }
 </style>
