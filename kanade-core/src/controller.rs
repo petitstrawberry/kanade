@@ -14,7 +14,7 @@ use crate::{
 
 pub struct Core {
     state: Arc<RwLock<PlaybackState>>,
-    outputs: HashMap<String, Arc<dyn AudioOutput>>,
+    outputs: Arc<RwLock<HashMap<String, Arc<dyn AudioOutput>>>>,
     broadcasters: Vec<Arc<dyn EventBroadcaster>>,
     queue_generation: Arc<AtomicU64>,
 }
@@ -26,18 +26,45 @@ impl Core {
     ) -> Self {
         Self {
             state: Arc::new(RwLock::new(PlaybackState { zones: Vec::new() })),
-            outputs: outputs.into_iter().collect(),
+            outputs: Arc::new(RwLock::new(outputs.into_iter().collect())),
             broadcasters,
             queue_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub fn add_output(&mut self, id: String, output: Arc<dyn AudioOutput>) {
-        self.outputs.insert(id, output);
+    /// Register a new output at runtime. Safe to call on an `Arc<Core>`.
+    pub async fn register_output(&self, id: String, output: Arc<dyn AudioOutput>) {
+        self.outputs.write().await.insert(id, output);
+    }
+
+    /// Remove a previously registered output. Safe to call on an `Arc<Core>`.
+    pub async fn unregister_output(&self, id: &str) {
+        self.outputs.write().await.remove(id);
     }
 
     pub fn add_broadcaster(&mut self, b: Arc<dyn EventBroadcaster>) {
         self.broadcasters.push(b);
+    }
+
+    /// Apply an external state update (e.g. from a remote output node) to the
+    /// named zone, then broadcast the change to all event listeners.
+    pub async fn sync_zone_state(
+        &self,
+        zone_id: &str,
+        status: PlaybackStatus,
+        position_secs: f64,
+        volume: u8,
+        current_index: Option<usize>,
+    ) {
+        let mut s = self.state.write().await;
+        if let Some(zone) = s.zone_mut(zone_id) {
+            zone.status = status;
+            zone.position_secs = position_secs;
+            zone.volume = volume;
+            zone.current_index = current_index;
+        }
+        drop(s);
+        self.broadcast().await;
     }
 
     pub fn state_handle(&self) -> Arc<RwLock<PlaybackState>> {
@@ -56,6 +83,14 @@ impl Core {
         self.state.write().await.zones.push(zone);
     }
 
+    pub async fn remove_zone(&self, zone_id: &str) {
+        self.state
+            .write()
+            .await
+            .zones
+            .retain(|z| z.id != zone_id);
+    }
+
     pub async fn get_zone(&self, id: &str) -> Option<Zone> {
         self.state.read().await.zone(id).cloned()
     }
@@ -65,9 +100,10 @@ impl Core {
         let zone = s.zone(zone_id).ok_or(CoreError::ZoneNotFound)?;
         let ids = zone.output_ids.clone();
         drop(s);
+        let outputs = self.outputs.read().await;
         let mut outs = Vec::new();
         for id in &ids {
-            if let Some(o) = self.outputs.get(id) {
+            if let Some(o) = outputs.get(id) {
                 outs.push(Arc::clone(o));
             }
         }

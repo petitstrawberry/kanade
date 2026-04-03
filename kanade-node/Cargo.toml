@@ -1,0 +1,22 @@
+[package]
+name = "kanade-node"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kanade-node"
+path = "src/main.rs"
+
+[dependencies]
+kanade-core = { path = "../kanade-core" }
+kanade-adapter-mpd = { path = "../kanade-adapter-mpd" }
+kanade-node-protocol = { path = "../kanade-node-protocol" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

@@ -3,11 +3,14 @@ members = [
     "kanade-core",
     "kanade-db",
     "kanade-scanner",
+    "kanade-node-protocol",
     "kanade-adapter-mpd",
+    "kanade-adapter-node-server",
     "kanade-adapter-ws",
     "kanade-adapter-openhome",
     "kanade-server-http",
     "kanade-tui",
+    "kanade-node",
     "kanade",
 ]
 resolver = "2"
