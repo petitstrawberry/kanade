@@ -104,7 +104,6 @@ pub struct App {
     pub library_level: u8,
     pub library_selected_artist: Option<String>,
     pub library_selected_genre: Option<String>,
-    pub active_node_id: String,
     pub req_counter: u64,
     pub in_search_input: bool,
 }
@@ -141,7 +140,6 @@ impl App {
             library_level: 0,
             library_selected_artist: None,
             library_selected_genre: None,
-            active_node_id: "default".to_string(),
             req_counter: 1,
             in_search_input: false,
         }
@@ -448,7 +446,7 @@ impl App {
 
     pub async fn handle_event(&mut self, event: AppEvent, state: &PlaybackState) {
         let AppEvent::Key(key) = event;
-        let node_id = self.active_node_id.clone();
+        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
 
         if self.active_panel == Panel::Search && self.in_search_input {
             match key.code {
@@ -674,9 +672,10 @@ impl App {
     }
 
     fn select_next(&self, state: &PlaybackState) {
+        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         match self.active_panel {
             Panel::Queue => {
-                let len = state.node(&self.active_node_id)
+                let len = state.node(&node_id)
                     .map(|n| n.queue.len())
                     .unwrap_or(0);
                 let mut list = self.queue_list.borrow_mut();
@@ -722,14 +721,15 @@ impl App {
     }
 
     fn queue_remove(&self, state: &PlaybackState) {
+        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
-            let queue_len = state.node(&self.active_node_id)
+            let queue_len = state.node(&node_id)
                 .map(|n| n.queue.len())
                 .unwrap_or(0);
             if i < queue_len {
                 let tx = self.ws_tx.clone();
-                let nid = self.active_node_id.clone();
+                let nid = node_id;
                 tokio::spawn(async move {
                     let _ = tx.send(ClientMessage::Command(WsCommand::RemoveFromQueue {
                         node_id: nid, index: i,
@@ -740,17 +740,18 @@ impl App {
     }
 
     fn queue_move_up(&self, state: &PlaybackState) {
+        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
             if i == 0 {
                 return;
             }
-            let queue_len = state.node(&self.active_node_id)
+            let queue_len = state.node(&node_id)
                 .map(|n| n.queue.len())
                 .unwrap_or(0);
             if i < queue_len {
                 let tx = self.ws_tx.clone();
-                let nid = self.active_node_id.clone();
+                let nid = node_id;
                 tokio::spawn(async move {
                     let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
                         node_id: nid, from: i, to: i - 1,
@@ -763,16 +764,17 @@ impl App {
     }
 
     fn queue_move_down(&self, state: &PlaybackState) {
+        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
-            let queue_len = state.node(&self.active_node_id)
+            let queue_len = state.node(&node_id)
                 .map(|n| n.queue.len())
                 .unwrap_or(0);
             if i + 1 >= queue_len {
                 return;
             }
             let tx = self.ws_tx.clone();
-            let nid = self.active_node_id.clone();
+            let nid = node_id;
             tokio::spawn(async move {
                 let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
                     node_id: nid, from: i, to: i + 1,
@@ -784,7 +786,7 @@ impl App {
     }
 
     async fn select_item(&mut self, _state: &PlaybackState) {
-        let node_id = self.active_node_id.clone();
+        let node_id = _state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
 
         match self.active_panel {
             Panel::Library => {

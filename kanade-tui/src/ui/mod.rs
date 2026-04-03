@@ -62,7 +62,12 @@ fn render_tabs(f: &mut Frame, area: ratatui::layout::Rect, app: &App) {
 }
 
 fn render_queue(f: &mut Frame, area: ratatui::layout::Rect, app: &App, state: &PlaybackState) {
-    let node = state.node(&app.active_node_id);
+    let node_id = state
+        .nodes
+        .first()
+        .map(|n| n.id.clone())
+        .unwrap_or_default();
+    let node = state.node(&node_id);
     let queue = node.map(|n| n.queue.as_slice()).unwrap_or(&[]);
     let current_index = node.and_then(|n| n.current_index);
 
