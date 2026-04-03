@@ -122,3 +122,11 @@ impl AudioOutput for MpdRenderer {
         Ok(())
     }
 }
+
+impl MpdRenderer {
+    #[instrument(skip(self))]
+    pub async fn clear(&self) -> Result<(), CoreError> {
+        self.client.send("stop\nclear\n").await?;
+        Ok(())
+    }
+}

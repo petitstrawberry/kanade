@@ -264,6 +264,9 @@ async fn run_session(
 
         // ── Renderer (rebuilt each session in case media_base_url changed) ─
         let renderer = Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_base_url));
+        if let Err(e) = renderer.clear().await {
+            warn!("Failed to clear stale MPD queue: {e}");
+        }
 
         // ── Relay loop ───────────────────────────────────────────────────
         loop {
