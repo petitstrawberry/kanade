@@ -166,29 +166,29 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="library-panel">
-  <div class="header">
-    <div class="mode-switcher">
-      <button class:active={mode === 'albums'} onclick={() => mode = 'albums'}>Albums</button>
-      <button class:active={mode === 'artists'} onclick={() => mode = 'artists'}>Artists</button>
-      <button class:active={mode === 'genres'} onclick={() => mode = 'genres'}>Genres</button>
-    </div>
-  </div>
-
-  <div class="content">
-    {#if selectedAlbum || selectedArtist || selectedGenre}
-      <div class="breadcrumb">
-        <button onclick={goBack} class="back-btn">← Back</button>
-        <span class="path">
-          {mode.charAt(0).toUpperCase() + mode.slice(1)}
-          {#if selectedArtist} / {selectedArtist}{/if}
-          {#if selectedGenre} / {selectedGenre}{/if}
-          {#if selectedAlbum} / {selectedAlbum.title || 'Unknown Album'}{/if}
-        </span>
+  <div class="library-panel">
+    <div class="content">
+      <div class="header">
+        {#if !selectedAlbum && !selectedArtist && !selectedGenre}
+          <div class="mode-switcher">
+            <button class:active={mode === 'albums'} onclick={() => mode = 'albums'}>Albums</button>
+            <button class:active={mode === 'artists'} onclick={() => mode = 'artists'}>Artists</button>
+            <button class:active={mode === 'genres'} onclick={() => mode = 'genres'}>Genres</button>
+          </div>
+        {:else}
+          <div class="breadcrumb">
+            <button onclick={goBack} class="back-btn">← Back</button>
+            <span class="path">
+              {mode.charAt(0).toUpperCase() + mode.slice(1)}
+              {#if selectedArtist} / {selectedArtist}{/if}
+              {#if selectedGenre} / {selectedGenre}{/if}
+              {#if selectedAlbum} / {selectedAlbum.title || 'Unknown Album'}{/if}
+            </span>
+          </div>
+        {/if}
       </div>
-    {/if}
 
-    <div class="view-area" bind:this={viewEl} onscroll={saveScroll}>
+      <div class="view-area" bind:this={viewEl} onscroll={saveScroll}>
       <!-- List View (Albums, Artists, or Genres grid) -->
       {#if !selectedAlbum}
         <div class="list-pane">
@@ -307,22 +307,26 @@
   }
 
   .header {
-    margin-bottom: 24px;
+    height: 40px;
+    margin-top: 8px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--bg-highlight);
+    display: flex;
+    align-items: center;
   }
 
   .mode-switcher {
-    display: inline-flex;
-    background-color: var(--bg-dark);
-    padding: 4px;
-    border-radius: 8px;
-    border: 1px solid var(--bg-highlight);
+    display: flex;
+    gap: 16px;
   }
 
   .mode-switcher button {
-    padding: 8px 16px;
-    border-radius: 6px;
+    padding: 4px 0;
     color: var(--comment);
     font-weight: 500;
+    font-size: 14px;
+    background: transparent;
   }
 
   .mode-switcher button:hover {
@@ -338,20 +342,18 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--bg-highlight);
   }
 
   .back-btn {
-    padding: 6px 12px;
-    background-color: var(--bg-dark);
-    border-radius: 6px;
+    padding: 4px 0;
+    background: transparent;
     color: var(--fg);
+    font-weight: 500;
+    font-size: 14px;
   }
 
   .back-btn:hover {
-    background-color: var(--bg-highlight);
+    color: var(--comment);
   }
 
   .path {
@@ -480,10 +482,6 @@
   }
 
   .tracks-header {
-    position: sticky;
-    top: 0;
-    background-color: var(--bg);
-    z-index: 10;
     padding-bottom: 24px;
     margin-bottom: 16px;
     border-bottom: 1px solid var(--bg-highlight);
@@ -664,7 +662,11 @@
 
   @media (max-width: 768px) {
     .library-panel {
-      padding: 12px;
+      padding: 12px 12px 0;
+    }
+
+    .header {
+      margin-top: 12px;
     }
 
     .album-grid {
