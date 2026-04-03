@@ -21,8 +21,9 @@ single shared state.
 - **Library management** — scans music directories, extracts metadata with
   [lofty](https://github.com/Serial-ATA/lofty-rs), indexes in SQLite with
   FTS5 full-text search
-- **WebSocket API** — JSON protocol for remote clients (web, CLI, etc.)
-- **OpenHome/UPnP** — SOAP/XML adapter for control points like JPLAY
+- **Kanade Protocol** — native WebSocket/JSON protocol family with Node
+  Subprotocol (server ↔ output nodes) and Client Subprotocol (server ↔ clients)
+- **OpenHome/UPnP** — external SOAP/XML adapter for control points like JPLAY
 - **Hexagonal architecture** — core domain is adapter-agnostic; swap
   backends without touching business logic
 
@@ -129,12 +130,13 @@ direnv allow   # or: nix develop
 
 ## Protocols
 
-| Protocol              | Port  | Direction              | Format         |
-| --------------------- | ----- | ---------------------- | -------------- |
-| Kanade Node Protocol  | 8082  | Server ↔ Output Nodes  | WebSocket JSON |
-| WebSocket Client API  | 8080  | Server ↔ Clients       | WebSocket JSON |
-| OpenHome / UPnP       | 8090  | Control Points → Server| SOAP/XML       |
-| HTTP Media            | 8081  | Clients → Server       | HTTP           |
+| Protocol | Port | Direction | Format |
+| -------- | ---- | --------- | ------ |
+| **Kanade Protocol** | | | |
+| ├─ Node Subprotocol | 8082 | Server ↔ Output Nodes | WebSocket JSON |
+| ├─ Client Subprotocol | 8080 | Server ↔ Clients | WebSocket JSON |
+| └─ Media Surface | 8081 | Clients → Server | HTTP |
+| **OpenHome / UPnP** | 8090 | Control Points → Server | SOAP/XML |
 
 See [protocols.md](protocols.md) for detailed protocol specifications.
 

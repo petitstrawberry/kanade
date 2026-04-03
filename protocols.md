@@ -1,17 +1,22 @@
-# Kanade Protocols
+# Kanade Protocol
 
-Reference documentation for all network protocols used by Kanade.
+The Kanade Protocol is the native protocol family for Kanade server communication. It comprises WebSocket-based subprotocols for nodes and clients, plus an HTTP surface for media delivery.
+
+External protocols like OpenHome/UPnP are documented separately.
 
 ## Table of Contents
 
-- [1. Kanade Node Protocol](#1-kanade-node-protocol) — Server ↔ Output Nodes
-- [2. WebSocket Client API](#2-websocket-client-api) — Server ↔ Clients
-- [3. OpenHome / UPnP](#3-openhome--upnp) — Control Points → Server
+- [Kanade Protocol](#kanade-protocol)
+  - [1. Node Subprotocol](#1-node-subprotocol) — Server ↔ Output Nodes
+  - [2. Client Subprotocol](#2-client-subprotocol) — Server ↔ Clients
+  - [3. Media Surface](#3-media-surface) — HTTP file delivery
+- [External Protocols](#external-protocols)
+  - [OpenHome / UPnP](#openhome--upnp) — Control Points → Server
 - [Shared Types](#shared-types)
 
 ---
 
-## 1. Kanade Node Protocol
+## 1. Node Subprotocol
 
 WebSocket JSON protocol between the Kanade server and output nodes.
 Defined in [`kanade-node-protocol`](../kanade-node-protocol/src/lib.rs).
@@ -69,42 +74,43 @@ Tagged union using `"type"` field. Mirrors the `AudioOutput` trait methods.
 { "type": "stop" }
 { "type": "seek", "position_secs": 30.0 }
 { "type": "set_volume", "volume": 75 }
-{ "type": "set_queue", "file_paths": ["/music/track.flac", "/music/track2.flac"] }
+{ "type": "set_queue", "file_paths": ["/music/track.flac", "/music/track2.flac"], "projection_generation": 4 }
 { "type": "add", "file_paths": ["/music/new.flac"] }
 { "type": "remove", "index": 0 }
 { "type": "move_track", "from": 0, "to": 2 }
 ```
 
-| Variant     | Fields                          | Description                    |
-| ----------- | ------------------------------- | ------------------------------ |
-| play        | —                               | Start or resume playback       |
-| pause       | —                               | Pause playback                 |
-| stop        | —                               | Stop playback                  |
-| seek        | `position_secs: f64`            | Seek to position (seconds)     |
-| set_volume  | `volume: u8` (0–100)            | Set volume level               |
-| set_queue   | `file_paths: [string]`          | Replace entire queue           |
-| add         | `file_paths: [string]`          | Append tracks to queue         |
-| remove      | `index: usize`                  | Remove track at queue position |
-| move_track  | `from: usize`, `to: usize`      | Move track within queue        |
+| Variant     | Fields                                           | Description                              |
+| ----------- | ------------------------------------------------ | ---------------------------------------- |
+| play        | —                                                | Start or resume playback                 |
+| pause       | —                                                | Pause playback                           |
+| stop        | —                                                | Stop playback                            |
+| seek        | `position_secs: f64`                             | Seek to position (seconds)               |
+| set_volume  | `volume: u8` (0–100)                             | Set volume level                         |
+| set_queue   | `file_paths: [string]`, `projection_generation`  | Replace the current MPD projection queue |
+| add         | `file_paths: [string]`                           | Append tracks to the current projection  |
+| remove      | `index: usize`                                   | Remove track at projection position      |
+| move_track  | `from: usize`, `to: usize`                       | Move track within the projection         |
 
 ### 1.4 NodeStateUpdate (Node → Server)
 
 Periodic state update from the node's audio backend.
 
 ```json
-{ "status": "playing", "position_secs": 72.5, "volume": 75, "current_index": 2 }
+{ "status": "playing", "position_secs": 72.5, "volume": 75, "mpd_song_index": 2, "projection_generation": 4 }
 ```
 
-| Field          | Type                | Description                |
-| -------------- | ------------------- | -------------------------- |
-| status         | `PlaybackStatus`    | Current playback status    |
-| position_secs  | `f64`               | Current position in seconds|
-| volume         | `u8` (0–100)        | Current volume             |
-| current_index  | `usize?`            | Index of current track in queue |
+| Field                  | Type             | Description                                         |
+| ---------------------- | ---------------- | --------------------------------------------------- |
+| status                 | `PlaybackStatus` | Current playback status                             |
+| position_secs          | `f64`            | Current position in seconds                         |
+| volume                 | `u8` (0–100)     | Current volume                                      |
+| mpd_song_index         | `usize?`         | MPD-local song index inside the current projection  |
+| projection_generation  | `u64`            | Generation of the projection this observation uses  |
 
 ---
 
-## 2. WebSocket Client API
+## 2. Client Subprotocol
 
 WebSocket JSON protocol for clients (web, TUI, custom). Defined in
 [`kanade-adapter-ws/command.rs`](../kanade-adapter-ws/src/command.rs).
@@ -235,21 +241,79 @@ Replies to request messages. The `data` field contains the response variant.
 
 ---
 
-## 3. OpenHome / UPnP
+## 3. Media Surface
+
+HTTP surface for media file delivery to clients. Serves tracks and artwork by
+stable IDs backed by the library database.
+
+**Server endpoint**: `MEDIA_ADDR` (default `http://HOST:8081`)
+
+### 3.1 Request Format
+
+```
+GET /media/tracks/<track_id> HTTP/1.1
+Host: HOST:8081
+Range: bytes=0-1023  (optional, for partial content)
+```
+
+```http
+GET /media/art/<album_id> HTTP/1.1
+Host: HOST:8081
+```
+
+### 3.2 Response Format
+
+**Success** (HTTP 200 or 206 for range requests):
+
+```
+HTTP/1.1 200 OK
+Content-Type: audio/flac
+Content-Length: 12345678
+Accept-Ranges: bytes
+
+<binary audio data>
+```
+
+**Partial Content** (HTTP 206):
+
+```
+HTTP/1.1 206 Partial Content
+Content-Type: audio/flac
+Content-Range: bytes 0-1023/12345678
+Content-Length: 1024
+
+<partial binary data>
+```
+
+### 3.3 Resource Mapping
+
+- `/media/tracks/<track_id>` resolves the track via the database and serves the
+  underlying audio file with range support.
+- `/media/art/<album_id>` serves album artwork from either a discovered artwork
+  path or embedded cover art extracted from the first track in the album.
+
+---
+
+## External Protocols
+
+These protocols are implemented as adapters but are not part of the Kanade
+Protocol family. They provide interoperability with external control systems.
+
+## OpenHome / UPnP
 
 SOAP/XML protocol for UPnP control points. Implemented in
 [`kanade-adapter-openhome`](../kanade-adapter-openhome/src/).
 
 **Server endpoint**: `OH_ADDR` (default `http://HOST:8090`)
 
-### 3.1 Service Types
+### Service Types
 
 | Service                    | URN                                         |
 | -------------------------- | ------------------------------------------- |
 | Transport                  | `urn:av-openhome-org:service:Transport:1`   |
 | Volume                     | `urn:av-openhome-org:service:Volume:1`      |
 
-### 3.2 SOAP Actions
+### SOAP Actions
 
 All actions target the `"default"` node.
 
@@ -280,7 +344,7 @@ Content-Length: ...
 | `SeekSecondAbsolute` | `<Value>120</Value>`    | Seek (seconds)    |
 | `SetVolume`          | `<Value>75</Value>`     | Set volume (0–100)|
 
-### 3.3 Response Format
+### Response Format
 
 **Success** (HTTP 200):
 
@@ -354,7 +418,7 @@ Fields with `null` values are omitted from JSON (`skip_serializing_if = "Option:
   "title": "Album Title",
   "artwork_path": "/music/Album/cover.jpg"
 }
-`
+```
 
 ### Node
 
