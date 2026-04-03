@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ws, nodeId } from '../lib/stores';
+  import { ws, showToast } from '../lib/stores';
   import type { Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
 
@@ -33,13 +33,12 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', node_id: nodeId, track });
+    ws.sendCommand({ cmd: 'add_to_queue', node_id: ws.getNodeId(), track });
+    showToast(`Added: ${track.title || 'Track'}`);
   }
 
-  function playNow(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', node_id: nodeId, track });
-    const queueLen = ws.nodes.find(z => z.id === nodeId)?.queue.length ?? 0;
-    ws.sendCommand({ cmd: 'play_index', node_id: nodeId, index: queueLen }); // approximate index
+  function playNow(track: Track, tracks: Track[], index: number) {
+    ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks, index });
   }
 </script>
 
@@ -67,7 +66,7 @@
         {#each results as track, i}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div class="track-item" ondblclick={() => playNow(track)} onclick={() => addToQueue(track)}>
+          <div class="track-item" onclick={() => playNow(track, results, i)}>
             <div class="track-info">
               <div class="title">{track.title || track.file_path.split('/').pop()}</div>
               <div class="meta">
@@ -83,9 +82,9 @@
               {formatDuration(track.duration_secs)}
             </div>
 
-            <button class="add-btn" onclick={(e) => { e.stopPropagation(); addToQueue(track); }}>
-              +
-            </button>
+            <div class="track-actions">
+              <button class="add-btn" onclick={(e) => { e.stopPropagation(); addToQueue(track); }}>+</button>
+            </div>
           </div>
         {/each}
       </div>
@@ -193,6 +192,36 @@
     font-size: 14px;
   }
 
+  .track-actions {
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .track-item:hover .track-actions {
+    opacity: 1;
+  }
+
+  .track-actions .play-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background-color: var(--bg-dark);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    cursor: pointer;
+    border: none;
+  }
+
+  .track-actions .play-btn:hover {
+    background-color: var(--accent);
+    color: var(--bg);
+  }
+
   .add-btn {
     width: 32px;
     height: 32px;
@@ -203,7 +232,6 @@
     align-items: center;
     justify-content: center;
     font-size: 20px;
-    opacity: 0;
     transition: all 0.2s;
   }
 

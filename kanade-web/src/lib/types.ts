@@ -55,7 +55,8 @@ export type WsCommand =
   | { cmd: "play_index"; node_id: string; index: number }
   | { cmd: "remove_from_queue"; node_id: string; index: number }
   | { cmd: "move_in_queue"; node_id: string; from: number; to: number }
-  | { cmd: "clear_queue"; node_id: string };
+  | { cmd: "clear_queue"; node_id: string }
+  | { cmd: "replace_and_play"; node_id: string; tracks: Track[]; index: number };
 
 export type WsRequest =
   | { req: "get_albums" }

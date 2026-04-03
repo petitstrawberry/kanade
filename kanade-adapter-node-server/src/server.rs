@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use futures_util::{SinkExt, StreamExt};
 use kanade_core::{
@@ -8,10 +8,9 @@ use kanade_core::{
 };
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 use crate::output::RemoteNodeOutput;
 
@@ -24,14 +23,30 @@ pub struct NodeServer {
     core: Arc<Core>,
     addr: SocketAddr,
     media_base_url: String,
+    restored_states: Arc<RwLock<HashMap<String, RestoredNodeState>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RestoredNodeState {
+    pub queue: Vec<kanade_core::model::Track>,
+    pub current_index: Option<usize>,
+    pub volume: u8,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
 }
 
 impl NodeServer {
-    pub fn new(core: Arc<Core>, addr: SocketAddr, media_base_url: impl Into<String>) -> Self {
+    pub fn new(
+        core: Arc<Core>,
+        addr: SocketAddr,
+        media_base_url: impl Into<String>,
+        restored_states: Arc<RwLock<HashMap<String, RestoredNodeState>>>,
+    ) -> Self {
         Self {
             core,
             addr,
             media_base_url: media_base_url.into(),
+            restored_states,
         }
     }
 
@@ -43,13 +58,21 @@ impl NodeServer {
 
         let core = self.core;
         let media_base_url = self.media_base_url;
+        let restored_states = self.restored_states;
 
         loop {
             match listener.accept().await {
                 Ok((stream, peer)) => {
                     let core = Arc::clone(&core);
                     let media_base_url = media_base_url.clone();
-                    tokio::spawn(handle_node_connection(stream, peer, core, media_base_url));
+                    let restored_states = Arc::clone(&restored_states);
+                    tokio::spawn(handle_node_connection(
+                        stream,
+                        peer,
+                        core,
+                        media_base_url,
+                        restored_states,
+                    ));
                 }
                 Err(e) => {
                     error!("NodeServer: accept error: {e}");
@@ -64,6 +87,7 @@ async fn handle_node_connection(
     peer: SocketAddr,
     core: Arc<Core>,
     media_base_url: String,
+    restored_states: Arc<RwLock<HashMap<String, RestoredNodeState>>>,
 ) {
     let ws = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -94,57 +118,57 @@ async fn handle_node_connection(
         }
     };
 
-    // ── Assign node identifier: first node gets "default", rest get UUIDs ───
-    let state_handle = core.state_handle();
-    let state = state_handle.read().await;
-    let node_id = if state.nodes.is_empty() {
-        "default".to_string()
-    } else {
-        Uuid::new_v4().to_string()
-    };
-    drop(state);
+    let node_id = registration.name.clone();
 
-    info!(
-        "Output node registered: name={}, assigned id={}",
-        registration.name, node_id
-    );
+    core.unregister_output(&node_id).await;
+    core.remove_node(&node_id).await;
 
-    // Send registration acknowledgement with the server-assigned node_id
+    let restored = restored_states.write().await.remove(&node_id);
+
+    info!("Output node registered: {node_id}");
+
     let ack = NodeRegistrationAck {
         node_id: node_id.clone(),
         media_base_url,
     };
-    match serde_json::to_string(&ack) {
-        Ok(json) => {
-            if ws_tx.send(Message::Text(json)).await.is_err() {
-                return;
-            }
-        }
-        Err(e) => {
-            error!("Node {peer}: failed to serialize ack: {e}");
-            return;
-        }
+    if ws_tx.send(Message::Text(serde_json::to_string(&ack).expect("ack serializable"))).await.is_err() {
+        return;
     }
 
-    // ── Set up RemoteNodeOutput ───────────────────────────────────────────────
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(64);
     let output: Arc<dyn AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
 
-    // Register output and create a node entry in the core
     core.register_output(node_id.clone(), Arc::clone(&output)).await;
+
+    let (queue, current_index, volume, shuffle, repeat) = if let Some(restored) = restored {
+        (
+            restored.queue,
+            restored.current_index,
+            restored.volume,
+            restored.shuffle,
+            restored.repeat,
+        )
+    } else {
+        (Vec::new(), None, 50, false, RepeatMode::Off)
+    };
+
     core.add_node(Node {
         id: node_id.clone(),
         name: registration.name.clone(),
         output_ids: vec![node_id.clone()],
-        queue: Vec::new(),
-        current_index: None,
+        queue,
+        current_index,
         status: PlaybackStatus::Stopped,
         position_secs: 0.0,
-        volume: 50,
-        shuffle: false,
-        repeat: RepeatMode::Off,
+        volume,
+        shuffle,
+        repeat,
     })
     .await;
+
+    if let Err(e) = core.restore_node_output_state(&node_id).await {
+        warn!("Node {peer}: failed to restore output state: {e}");
+    }
 
     // ── Main loop: relay commands → node, state updates ← node ───────────────
     loop {

@@ -16,4 +16,4 @@ pub mod output;
 pub mod server;
 
 pub use output::RemoteNodeOutput;
-pub use server::NodeServer;
+pub use server::{NodeServer, RestoredNodeState};

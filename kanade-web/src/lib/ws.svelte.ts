@@ -13,6 +13,10 @@ export class WsClient {
   nodes = $state<Node[]>([]);
   connected = $state(false);
 
+  getNodeId(): string {
+    return this.nodes[0]?.id ?? '';
+  }
+
   constructor(url: string) {
     this.url = url;
   }

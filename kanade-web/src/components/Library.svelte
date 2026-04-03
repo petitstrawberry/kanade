@@ -1,11 +1,15 @@
 <script lang="ts">
-  import { ws, nodeId } from '../lib/stores';
+  import { ws, showToast } from '../lib/stores';
   import type { Album, Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
   import { mediaBase } from '../lib/stores';
+  import { tick } from 'svelte';
 
   type Mode = 'albums' | 'artists' | 'genres';
   let mode = $state<Mode>('albums');
+
+  const scrollStore = new Map<string, number>();
+  let viewEl: HTMLElement;
 
   const PLACEHOLDER_SVG = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="none" stroke="%23888" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="24" height="24" fill="%231a1b26"/><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>')}`;
 
@@ -16,12 +20,30 @@
   let selectedArtist = $state<string | null>(null);
   let selectedGenre = $state<string | null>(null);
   let selectedAlbum = $state<Album | null>(null);
-  
+
   let currentTracks = $state<Track[]>([]);
 
   const hasMultipleDiscs = $derived(
     new Set(currentTracks.map(t => t.disc_number ?? 0)).size > 1
   );
+
+  let viewKey = $derived(
+    selectedAlbum ? `album-${selectedAlbum.id}`
+    : selectedArtist ? `artist-${selectedArtist}`
+    : selectedGenre ? `genre-${selectedGenre}`
+    : `root-${mode}`
+  );
+
+  $effect(() => {
+    viewKey;
+    tick().then(() => {
+      if (viewEl) viewEl.scrollTop = scrollStore.get(viewKey) ?? 0;
+    });
+  });
+
+  function saveScroll() {
+    if (viewEl) scrollStore.set(viewKey, viewEl.scrollTop);
+  }
 
   function cycleMode(reverse: boolean) {
     const modes: Mode[] = ['albums', 'artists', 'genres'];
@@ -107,21 +129,38 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', node_id: nodeId, track });
+    ws.sendCommand({ cmd: 'add_to_queue', node_id: ws.getNodeId(), track });
+    showToast(`Added: ${track.title || 'Track'}`);
   }
 
-  function playNow(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', node_id: nodeId, track });
-    const queueLen = ws.nodes.find(z => z.id === nodeId)?.queue.length ?? 0;
-    ws.sendCommand({ cmd: 'play_index', node_id: nodeId, index: queueLen });
+  function playNow(track: Track, tracks: Track[], index: number) {
+    ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks, index });
   }
 
-  function addAlbumToQueue(albumId: string) {
+  function addAlbumTracksToQueue(albumId: string) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: albumId }).then(res => {
       if ('tracks' in res) {
-        ws.sendCommand({ cmd: 'add_tracks_to_queue', node_id: nodeId, tracks: res.tracks });
+        ws.sendCommand({ cmd: 'add_tracks_to_queue', node_id: ws.getNodeId(), tracks: res.tracks });
+        showToast(`Added ${res.tracks.length} tracks`);
       }
     }).catch(() => {});
+  }
+
+  function playAlbumFromGrid(album: Album) {
+    ws.sendRequest({ req: 'get_album_tracks', album_id: album.id }).then(res => {
+      if ('tracks' in res && res.tracks.length > 0) {
+        ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks: res.tracks, index: 0 });
+      }
+    }).catch(() => {});
+  }
+
+  function addAlbumToQueue() {
+    ws.sendCommand({ cmd: 'add_tracks_to_queue', node_id: ws.getNodeId(), tracks: currentTracks });
+    showToast(`Added ${currentTracks.length} tracks`);
+  }
+
+  function playAlbumNow() {
+    ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks: currentTracks, index: 0 });
   }
 </script>
 
@@ -149,7 +188,7 @@
       </div>
     {/if}
 
-    <div class="view-area">
+    <div class="view-area" bind:this={viewEl} onscroll={saveScroll}>
       <!-- List View (Albums, Artists, or Genres grid) -->
       {#if !selectedAlbum}
         <div class="list-pane">
@@ -189,7 +228,8 @@
                         }}
                       />
                       <div class="play-overlay">
-                        <button class="add-btn" onclick={(e) => { e.stopPropagation(); addAlbumToQueue(album.id); }}>+</button>
+                        <button class="add-btn" onclick={(e) => { e.stopPropagation(); addAlbumTracksToQueue(album.id); }}>+</button>
+                        <button class="play-btn" onclick={(e) => { e.stopPropagation(); playAlbumFromGrid(album); }}>▶</button>
                       </div>
                     </div>
                   <div class="album-info" onclick={() => selectAlbum(album)}>
@@ -204,6 +244,18 @@
         <!-- Tracks View -->
         <div class="tracks-pane">
           <div class="tracks-header">
+            <img
+              class="album-art"
+              src="{mediaBase}/media/art/{selectedAlbum.id}"
+              alt=""
+              onerror={(e: Event) => {
+                const img = e.target as HTMLImageElement;
+                if (!img.dataset.fallback) {
+                  img.dataset.fallback = '1';
+                  img.src = PLACEHOLDER_SVG;
+                }
+              }}
+            />
             <div class="album-info-header">
               <h2>{selectedAlbum.title || 'Unknown Album'}</h2>
               {#if currentTracks.length > 0 && currentTracks[0].album_artist}
@@ -211,6 +263,10 @@
               {/if}
               <div class="album-meta">
                 {currentTracks.length} tracks • {formatDuration(currentTracks.reduce((acc, t) => acc + (t.duration_secs || 0), 0))}
+              </div>
+              <div class="album-actions">
+                <button class="action-btn" onclick={playAlbumNow}>▶ Play</button>
+                <button class="action-btn" onclick={addAlbumToQueue}>+ Add All</button>
               </div>
             </div>
           </div>
@@ -221,7 +277,7 @@
               {/if}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div class="track-item" ondblclick={() => playNow(track)} onclick={() => addToQueue(track)}>
+              <div class="track-item" onclick={() => playNow(track, currentTracks, i)}>
                 <div class="track-number">{track.track_number ?? '-'}</div>
                 <div class="track-info">
                   <div class="title">{track.title || track.file_path.split('/').pop()}</div>
@@ -230,7 +286,9 @@
                   {/if}
                 </div>
                 <div class="duration">{formatDuration(track.duration_secs)}</div>
-                <button class="add-btn" onclick={(e) => { e.stopPropagation(); addToQueue(track); }}>+</button>
+                <div class="track-actions">
+                  <button class="add-btn" onclick={(e) => { e.stopPropagation(); addToQueue(track); }}>+</button>
+                </div>
               </div>
             {/each}
           </div>
@@ -310,14 +368,12 @@
 
   .view-area {
     flex: 1;
-    display: flex;
-    gap: 24px;
+    overflow-y: auto;
     min-height: 0;
   }
 
-  .list-pane, .tracks-pane {
+  .list-pane {
     flex: 1;
-    overflow-y: auto;
   }
 
   .grid-list {
@@ -385,11 +441,29 @@
     opacity: 1;
   }
 
-  .play-overlay .add-btn {
+  .play-overlay .add-btn,
+  .play-overlay .play-btn {
     width: 48px;
     height: 48px;
     font-size: 24px;
     opacity: 1;
+  }
+
+  .play-overlay .play-btn {
+    border-radius: 50%;
+    background-color: var(--accent);
+    color: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border: none;
+    margin-left: 8px;
+    transition: transform 0.2s;
+  }
+
+  .play-overlay .play-btn:hover {
+    transform: scale(1.1);
   }
 
   .album-info {
@@ -413,6 +487,46 @@
     padding-bottom: 24px;
     margin-bottom: 16px;
     border-bottom: 1px solid var(--bg-highlight);
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+  }
+
+  .album-art {
+    width: 120px;
+    height: 120px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .album-info-header {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .album-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .action-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    background-color: var(--bg-dark);
+    color: var(--accent);
+    font-weight: 500;
+    font-size: 13px;
+    opacity: 1;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+  }
+
+  .action-btn:hover {
+    background-color: var(--accent);
+    color: var(--bg);
   }
 
   .album-info-header h2 {
@@ -457,6 +571,36 @@
     color: var(--comment);
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .track-actions {
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .track-item:hover .track-actions {
+    opacity: 1;
+  }
+
+  .track-actions .play-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background-color: var(--bg-dark);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    cursor: pointer;
+    border: none;
+  }
+
+  .track-actions .play-btn:hover {
+    background-color: var(--accent);
+    color: var(--bg);
   }
 
   .disc-separator {

@@ -142,6 +142,8 @@ Tagged with `"cmd"`. No response is sent.
 
 ```json
 { "cmd": "play", "node_id": "default" }
+{ "cmd": "replace_and_play", "node_id": "default", "tracks": [{ "id": "...", "title": "...", ... }], "index": 0 }
+{ "cmd": "add_to_queue", "node_id": "default", "track": { "id": "...", ... } }
 ```
 
 | cmd                  | Additional Fields                    | Description           |
@@ -158,6 +160,7 @@ Tagged with `"cmd"`. No response is sent.
 | `add_to_queue`       | `node_id`, `track: Track`           | Add single track      |
 | `add_tracks_to_queue`| `node_id`, `tracks: [Track]`        | Add multiple tracks   |
 | `play_index`         | `node_id`, `index: usize`           | Play track at index   |
+| `replace_and_play`   | `node_id`, `tracks: [Track]`, `index: usize` | Replace queue and play from index |
 | `remove_from_queue`  | `node_id`, `index: usize`           | Remove track at index |
 | `move_in_queue`      | `node_id`, `from: usize`, `to: usize` | Reorder track       |
 | `clear_queue`        | `node_id`                            | Clear entire queue    |
@@ -401,6 +404,7 @@ Content-Length: ...
   "composer": "Composer",
   "genre": "Genre",
   "track_number": 1,
+  "disc_number": 1,
   "duration_secs": 245.93,
   "format": "FLAC",
   "sample_rate": 48000

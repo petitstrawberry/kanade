@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { ws, nodeId, mediaBase } from '../lib/stores';
+  import { ws, mediaBase } from '../lib/stores';
   import { formatSampleRate } from '../lib/format';
 
-  let zone = $derived(ws.nodes.find(z => z.id === nodeId));
-  let currentTrack = $derived(zone?.queue[zone.current_index ?? -1]);
+  let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
+  let currentTrack = $derived(node?.queue[node.current_index ?? -1]);
   let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
 </script>
 

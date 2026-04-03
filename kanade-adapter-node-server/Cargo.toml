@@ -13,4 +13,3 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
-uuid = { workspace = true }

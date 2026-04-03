@@ -143,6 +143,9 @@ async fn dispatch_command(cmd: WsCommand, core: &Core) {
         WsCommand::RemoveFromQueue { node_id, index } => core.remove_from_node_queue(&node_id, index).await,
         WsCommand::MoveInQueue { node_id, from, to } => core.move_in_node_queue(&node_id, from, to).await,
         WsCommand::ClearQueue { node_id } => core.clear_node_queue(&node_id).await,
+WsCommand::ReplaceAndPlay { node_id, tracks, index } => {
+    core.set_node_queue(&node_id, tracks, Some(index)).await
+}
     };
     if let Err(e) = result {
         warn!("WS dispatch error: {e}");

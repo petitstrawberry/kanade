@@ -1,56 +1,56 @@
 <script lang="ts">
-  import { ws, nodeId } from '../lib/stores';
+  import { ws } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
-  let zone = $derived(ws.nodes.find(z => z.id === nodeId));
-  let currentTrack = $derived(zone?.queue[zone.current_index ?? -1]);
-  let isPlaying = $derived(zone?.status === 'playing');
-  let position = $derived(zone?.position_secs ?? 0);
+  let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
+  let currentTrack = $derived(node?.queue[node.current_index ?? -1]);
+  let isPlaying = $derived(node?.status === 'playing');
+  let position = $derived(node?.position_secs ?? 0);
   let duration = $derived(currentTrack?.duration_secs ?? 0);
-  let volume = $derived(zone?.volume ?? 100);
+  let volume = $derived(node?.volume ?? 100);
 
   function togglePlay() {
-    if (!zone) return;
+    if (!node) return;
     if (isPlaying) {
-      ws.sendCommand({ cmd: 'pause', node_id: nodeId });
+      ws.sendCommand({ cmd: 'pause', node_id: ws.getNodeId() });
     } else {
-      ws.sendCommand({ cmd: 'play', node_id: nodeId });
+      ws.sendCommand({ cmd: 'play', node_id: ws.getNodeId() });
     }
   }
 
   function playNext() {
-    ws.sendCommand({ cmd: 'next', node_id: nodeId });
+    ws.sendCommand({ cmd: 'next', node_id: ws.getNodeId() });
   }
 
   function playPrev() {
-    ws.sendCommand({ cmd: 'previous', node_id: nodeId });
+    ws.sendCommand({ cmd: 'previous', node_id: ws.getNodeId() });
   }
 
   function seek(e: MouseEvent) {
-    if (!duration || !zone) return;
+    if (!duration || !node) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const newPos = percent * duration;
-    ws.sendCommand({ cmd: 'seek', node_id: nodeId, position_secs: newPos });
+    ws.sendCommand({ cmd: 'seek', node_id: ws.getNodeId(), position_secs: newPos });
   }
 
   function setVolume(e: Event) {
     const input = e.target as HTMLInputElement;
-    ws.sendCommand({ cmd: 'set_volume', node_id: nodeId, volume: parseInt(input.value) });
+    ws.sendCommand({ cmd: 'set_volume', node_id: ws.getNodeId(), volume: parseInt(input.value) });
   }
 
   function toggleShuffle() {
-    if (zone) ws.sendCommand({ cmd: 'set_shuffle', node_id: nodeId, shuffle: !zone.shuffle });
+    if (node) ws.sendCommand({ cmd: 'set_shuffle', node_id: ws.getNodeId(), shuffle: !node.shuffle });
   }
 
   function toggleRepeat() {
-    if (!zone) return;
+    if (!node) return;
     const map: Record<string, 'off' | 'one' | 'all'> = {
       'off': 'all',
       'all': 'one',
       'one': 'off'
     };
-    ws.sendCommand({ cmd: 'set_repeat', node_id: nodeId, repeat: map[zone.repeat] });
+    ws.sendCommand({ cmd: 'set_repeat', node_id: ws.getNodeId(), repeat: map[node.repeat] });
   }
 </script>
 
@@ -64,7 +64,7 @@
 
   <div class="controls-center">
     <div class="buttons">
-      <button class="icon sm" class:active={zone?.shuffle} onclick={toggleShuffle}>
+      <button class="icon sm" class:active={node?.shuffle} onclick={toggleShuffle}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
       </button>
       <button class="icon" onclick={playPrev}>
@@ -80,8 +80,8 @@
       <button class="icon" onclick={playNext}>
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><path d="M4 3l10 6-10 6V3z"/><rect x="14" y="3" width="3" height="12" rx="1"/></svg>
       </button>
-      <button class="icon sm" class:active={zone?.repeat !== 'off'} onclick={toggleRepeat}>
-        {#if zone?.repeat === 'one'}
+      <button class="icon sm" class:active={node?.repeat !== 'off'} onclick={toggleRepeat}>
+        {#if node?.repeat === 'one'}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
         {:else}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/></svg>

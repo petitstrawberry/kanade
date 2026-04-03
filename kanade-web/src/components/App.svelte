@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ws, ActiveTab, nodeId } from '../lib/stores';
+  import { fly } from 'svelte/transition';
+  import { ws, ActiveTab, toasts } from '../lib/stores';
   import TransportBar from './TransportBar.svelte';
   import NowPlaying from './NowPlaying.svelte';
   import Library from './Library.svelte';
@@ -19,12 +20,15 @@
 
       if (e.key === ' ') {
         e.preventDefault();
-        const node = ws.nodes.find(z => z.id === nodeId);
-        if (node) {
-          if (node.status === 'playing') {
-            ws.sendCommand({ cmd: 'pause', node_id: nodeId });
-          } else {
-            ws.sendCommand({ cmd: 'play', node_id: nodeId });
+        const nid = ws.getNodeId();
+        if (nid) {
+          const node = ws.nodes.find(z => z.id === nid);
+          if (node) {
+            if (node.status === 'playing') {
+              ws.sendCommand({ cmd: 'pause', node_id: nid });
+            } else {
+              ws.sendCommand({ cmd: 'play', node_id: nid });
+            }
           }
         }
       } else if (e.key === '/') {
@@ -66,19 +70,20 @@
   </nav>
 
   <main class="content">
-    {#if tab === 'now-playing'}
-      <NowPlaying />
-    {:else if tab === 'library'}
-      <Library />
-    {:else if tab === 'queue'}
-      <Queue />
-    {:else if tab === 'search'}
-      <Search />
-    {/if}
+    <div class="tab-panel" class:visible={tab === 'now-playing'}><NowPlaying /></div>
+    <div class="tab-panel" class:visible={tab === 'library'}><Library /></div>
+    <div class="tab-panel" class:visible={tab === 'queue'}><Queue /></div>
+    <div class="tab-panel" class:visible={tab === 'search'}><Search /></div>
   </main>
 
   <div class="transport">
     <TransportBar />
+  </div>
+
+  <div class="toast-container">
+    {#each toasts as toast (toast.id)}
+      <div class="toast" transition:fly={{ y: 20, duration: 150 }}>{toast.message}</div>
+    {/each}
   </div>
 </div>
 
@@ -154,10 +159,42 @@
     position: relative;
   }
 
+  .tab-panel {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    display: none;
+  }
+
+  .tab-panel.visible {
+    display: block;
+  }
+
   .transport {
     grid-column: 1 / -1;
     background-color: var(--bg-dark);
     border-top: 1px solid var(--bg-highlight);
     z-index: 10;
+  }
+
+  .toast-container {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100;
+    pointer-events: none;
+  }
+
+  .toast {
+    background-color: var(--bg-highlight);
+    color: var(--fg);
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    white-space: nowrap;
   }
 </style>

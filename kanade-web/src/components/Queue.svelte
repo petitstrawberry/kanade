@@ -1,29 +1,29 @@
 <script lang="ts">
-  import { ws, nodeId } from '../lib/stores';
+  import { ws } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
-  let zone = $derived(ws.nodes.find(z => z.id === nodeId));
-  let queue = $derived(zone?.queue ?? []);
-  let currentIndex = $derived(zone?.current_index ?? -1);
+  let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
+  let queue = $derived(node?.queue ?? []);
+  let currentIndex = $derived(node?.current_index ?? -1);
 
   function playIndex(index: number) {
-    ws.sendCommand({ cmd: 'play_index', node_id: nodeId, index });
+    ws.sendCommand({ cmd: 'play_index', node_id: ws.getNodeId(), index });
   }
 
   function removeTrack(index: number, e: MouseEvent) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'remove_from_queue', node_id: nodeId, index });
+    ws.sendCommand({ cmd: 'remove_from_queue', node_id: ws.getNodeId(), index });
   }
 
   function moveTrack(from: number, to: number, e: MouseEvent) {
     e.stopPropagation();
     if (to >= 0 && to < queue.length) {
-      ws.sendCommand({ cmd: 'move_in_queue', node_id: nodeId, from, to });
+      ws.sendCommand({ cmd: 'move_in_queue', node_id: ws.getNodeId(), from, to });
     }
   }
 
   function clearQueue() {
-    ws.sendCommand({ cmd: 'clear_queue', node_id: nodeId });
+    ws.sendCommand({ cmd: 'clear_queue', node_id: ws.getNodeId() });
   }
 </script>
 
@@ -43,7 +43,7 @@
       <div 
         class="track-item" 
         class:playing={i === currentIndex}
-        ondblclick={() => playIndex(i)}
+        onclick={() => playIndex(i)}
       >
         <div class="play-indicator">
           {#if i === currentIndex}

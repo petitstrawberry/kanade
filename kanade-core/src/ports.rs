@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use crate::error::CoreError;
+use crate::state::PlaybackState;
 
 #[async_trait]
 pub trait AudioOutput: Send + Sync {
@@ -21,4 +22,9 @@ pub trait AudioOutput: Send + Sync {
 #[async_trait]
 pub trait EventBroadcaster: Send + Sync {
     async fn on_state_changed(&self, state: &crate::state::PlaybackState);
+}
+
+#[async_trait]
+pub trait StatePersister: Send + Sync {
+    async fn persist(&self, state: &PlaybackState);
 }

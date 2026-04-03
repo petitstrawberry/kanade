@@ -60,6 +60,11 @@ pub enum WsCommand {
     ClearQueue {
         node_id: String,
     },
+    ReplaceAndPlay {
+        node_id: String,
+        tracks: Vec<Track>,
+        index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,7 +7,7 @@ use tracing::instrument;
 use crate::{
     error::CoreError,
     model::{Node, PlaybackStatus, RepeatMode, Track},
-    ports::{AudioOutput, EventBroadcaster},
+    ports::{AudioOutput, EventBroadcaster, StatePersister},
     state::PlaybackState,
 };
 
@@ -22,6 +22,7 @@ pub struct Core {
     state: Arc<RwLock<PlaybackState>>,
     outputs: Arc<RwLock<HashMap<String, Arc<dyn AudioOutput>>>>,
     broadcasters: Vec<Arc<dyn EventBroadcaster>>,
+    persisters: Vec<Arc<dyn StatePersister>>,
     transport_state: Arc<RwLock<HashMap<String, NodeTransportState>>>,
 }
 
@@ -34,6 +35,7 @@ impl Core {
             state: Arc::new(RwLock::new(PlaybackState { nodes: Vec::new() })),
             outputs: Arc::new(RwLock::new(outputs.into_iter().collect())),
             broadcasters,
+            persisters: Vec::new(),
             transport_state: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -50,6 +52,14 @@ impl Core {
 
     pub fn add_broadcaster(&mut self, b: Arc<dyn EventBroadcaster>) {
         self.broadcasters.push(b);
+    }
+
+    pub fn add_persister(&mut self, p: Arc<dyn StatePersister>) {
+        self.persisters.push(p);
+    }
+
+    pub async fn restore_state(&self, state: PlaybackState) {
+        *self.state.write().await = state;
     }
 
     /// Apply an external state update (e.g. from a remote output node) to the
@@ -147,12 +157,8 @@ impl Core {
     }
 
     pub async fn add_node(&self, node: Node) {
-        let node_id = node.id.clone();
         self.state.write().await.nodes.push(node);
-        self.transport_state
-            .write()
-            .await
-            .insert(node_id, NodeTransportState::default());
+        self.broadcast().await;
     }
 
     pub async fn remove_node(&self, node_id: &str) {
@@ -484,13 +490,20 @@ impl Core {
         tracks: Vec<Track>,
         start_index: Option<usize>,
     ) -> Result<(), CoreError> {
-        let file_paths: Vec<String> = tracks.iter().map(|t| t.file_path.clone()).collect();
-        let projection_start = if file_paths.is_empty() { None } else { Some(0) };
+        let start = start_index.unwrap_or(0);
+        let head = tracks.get(start).map(|t| vec![t.file_path.clone()]).unwrap_or_default();
+        let tail = tracks.iter().skip(start + 1).map(|t| t.file_path.clone()).collect::<Vec<_>>();
+        let rotated: Vec<String> = {
+            let mut p = head;
+            p.extend(tail);
+            p
+        };
+        let projection_start = if rotated.is_empty() { None } else { start_index };
         let projection_generation = self
-            .rebuild_projection_state(node_id, projection_start, file_paths.len())
+            .rebuild_projection_state(node_id, projection_start, rotated.len())
             .await;
         for o in self.each_output(node_id).await? {
-            o.set_queue(&file_paths, projection_generation).await?;
+            o.set_queue(&rotated, projection_generation).await?;
         }
         let mut s = self.state.write().await;
         let node = s.node_mut(node_id).ok_or(CoreError::NodeNotFound)?;
@@ -507,6 +520,30 @@ impl Core {
             for o in self.each_output(node_id).await? { o.play().await?; }
         }
         self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn restore_node_output_state(&self, node_id: &str) -> Result<(), CoreError> {
+        let (queue, projection_start, loaded_len, volume) = {
+            let s = self.state.read().await;
+            let node = s.node(node_id).ok_or(CoreError::NodeNotFound)?;
+            (
+                Self::build_queue_file_paths(node),
+                node.current_index,
+                node.queue.len(),
+                node.volume,
+            )
+        };
+
+        let projection_generation = self
+            .rebuild_projection_state(node_id, projection_start, loaded_len)
+            .await;
+
+        for o in self.each_output(node_id).await? {
+            o.set_volume(volume).await?;
+            o.set_queue(&queue, projection_generation).await?;
+        }
+
         Ok(())
     }
 
@@ -527,6 +564,9 @@ impl Core {
         let snapshot = self.state.read().await.clone();
         for b in &self.broadcasters {
             b.on_state_changed(&snapshot).await;
+        }
+        for p in &self.persisters {
+            p.persist(&snapshot).await;
         }
     }
 }
@@ -657,11 +697,11 @@ mod tests {
 
         let generation = output.last_projection_generation();
 
-        core.sync_node_state("default", PlaybackStatus::Playing, 12.0, 70, Some(2), generation)
+        core.sync_node_state("default", PlaybackStatus::Playing, 12.0, 70, Some(0), generation)
             .await;
 
         let node = core.get_node("default").await.unwrap();
-        assert_eq!(node.current_index, Some(2));
+        assert_eq!(node.current_index, Some(1));
         assert_eq!(node.position_secs, 12.0);
         assert_eq!(node.volume, 70);
     }

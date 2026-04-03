@@ -15,6 +15,16 @@ pub struct Database {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedNodeState {
+    pub node_id: String,
+    pub queue_file_paths: Vec<String>,
+    pub current_index: Option<usize>,
+    pub volume: u8,
+    pub shuffle: bool,
+    pub repeat: String,
+}
+
 impl Database {
     /// Open (or create) the SQLite database at `path`, applying the schema.
     pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
@@ -198,6 +208,73 @@ impl Database {
             params![file_path],
         )?;
         Ok(())
+    }
+
+    pub fn save_node_state(
+        &self,
+        node_id: &str,
+        queue_file_paths: &[String],
+        current_index: Option<usize>,
+        volume: u8,
+        shuffle: bool,
+        repeat: &str,
+    ) -> anyhow::Result<()> {
+        let queue_json = serde_json::to_string(queue_file_paths)?;
+        let current_index = current_index.map(|i| i as i64);
+        let volume = i64::from(volume);
+        let shuffle = i64::from(shuffle as u8);
+
+        self.conn.execute(
+            r#"INSERT INTO playback_state (node_id, queue, current_index, volume, shuffle, repeat, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch())
+               ON CONFLICT(node_id) DO UPDATE SET
+                   queue         = excluded.queue,
+                   current_index = excluded.current_index,
+                   volume        = excluded.volume,
+                   shuffle       = excluded.shuffle,
+                   repeat        = excluded.repeat,
+                   updated_at    = unixepoch()"#,
+            params![node_id, queue_json, current_index, volume, shuffle, repeat],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_all_node_states(&self) -> anyhow::Result<Vec<SavedNodeState>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM playback_state ORDER BY node_id")?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let node_id: String = row.get(0)?;
+            let queue_json: String = row.get(1)?;
+            let queue_file_paths: Vec<String> = serde_json::from_str(&queue_json)?;
+
+            let current_index = row
+                .get::<_, Option<i64>>(2)?
+                .map(|i| {
+                    usize::try_from(i).map_err(|_| anyhow::anyhow!("invalid current_index: {i}"))
+                })
+                .transpose()?;
+
+            let volume_i64: i64 = row.get(3)?;
+            let volume = u8::try_from(volume_i64)
+                .map_err(|_| anyhow::anyhow!("invalid volume: {volume_i64}"))?;
+            let shuffle = row.get::<_, i64>(4)? != 0;
+            let repeat: String = row.get(5)?;
+
+            out.push(SavedNodeState {
+                node_id,
+                queue_file_paths,
+                current_index,
+                volume,
+                shuffle,
+                repeat,
+            });
+        }
+
+        Ok(out)
     }
 
     // ------------------------------------------------------------------
@@ -704,5 +781,81 @@ mod tests {
             .get_track_by_path("/music/album/01.flac")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn save_and_load_node_state() {
+        let db = Database::open_in_memory().unwrap();
+        let queue = vec![
+            "/music/album/01.flac".to_string(),
+            "/music/album/02.flac".to_string(),
+        ];
+
+        db.save_node_state("node-a", &queue, Some(1), 77, true, "all")
+            .unwrap();
+
+        let states = db.load_all_node_states().unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(
+            states[0],
+            SavedNodeState {
+                node_id: "node-a".to_string(),
+                queue_file_paths: queue,
+                current_index: Some(1),
+                volume: 77,
+                shuffle: true,
+                repeat: "all".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn save_node_state_upsert() {
+        let db = Database::open_in_memory().unwrap();
+
+        db.save_node_state(
+            "node-a",
+            &["/music/album/01.flac".to_string()],
+            Some(0),
+            50,
+            false,
+            "off",
+        )
+        .unwrap();
+
+        db.save_node_state(
+            "node-a",
+            &[
+                "/music/album/02.flac".to_string(),
+                "/music/album/03.flac".to_string(),
+            ],
+            Some(1),
+            90,
+            true,
+            "one",
+        )
+        .unwrap();
+
+        let states = db.load_all_node_states().unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].node_id, "node-a");
+        assert_eq!(
+            states[0].queue_file_paths,
+            vec![
+                "/music/album/02.flac".to_string(),
+                "/music/album/03.flac".to_string()
+            ]
+        );
+        assert_eq!(states[0].current_index, Some(1));
+        assert_eq!(states[0].volume, 90);
+        assert!(states[0].shuffle);
+        assert_eq!(states[0].repeat, "one");
+    }
+
+    #[test]
+    fn load_node_states_empty() {
+        let db = Database::open_in_memory().unwrap();
+        let states = db.load_all_node_states().unwrap();
+        assert!(states.is_empty());
     }
 }
