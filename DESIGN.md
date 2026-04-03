@@ -5,7 +5,7 @@
 ```
   Clients                             Kanade Server                           Output Nodes
   ┌──────────┐                       ┌──────────────────┐                 ┌──────────────┐
-  │ kanade-  │  WS :8080, HTTP: 8081  │                  │   WS :8082      │ living-room  │
+  │ kanade-  │  WS :8080, HTTP: 8081 │                  │   WS :8082      │ living-room  │
   │ web      │─────────────────────▶ │  kanade-core     │────────────────▶│  (MPD)       │
   └──────────┘                       │  State · Queue   │                 └──────────────┘
                                      │  Controller      │                 ┌──────────────┐
