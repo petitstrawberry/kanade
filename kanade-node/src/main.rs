@@ -9,6 +9,12 @@
 //! The server automatically assigns a unique identifier (UUID) to each
 //! connected node.  The node only provides a human-readable name.
 //!
+//! # Resilience
+//!
+//! The node automatically reconnects to the server with exponential backoff
+//! when the connection drops or the handshake fails.  The MPD state sync task
+//! runs independently and is reused across reconnections.
+//!
 //! # Configuration (environment variables)
 //!
 //! | Variable        | Default               | Description                        |
@@ -23,6 +29,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -45,14 +52,29 @@ use tracing::{error, info, warn};
 /// [`NodeStateUpdate`] messages and sends them to the server over the WebSocket
 /// connection.
 struct NodeEventBroadcaster {
-    tx: mpsc::Sender<String>,
+    tx: tokio::sync::Mutex<mpsc::Sender<String>>,
     projection_generation: Arc<AtomicU64>,
+}
+
+impl NodeEventBroadcaster {
+    fn new(
+        tx: mpsc::Sender<String>,
+        projection_generation: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            tx: tokio::sync::Mutex::new(tx),
+            projection_generation,
+        }
+    }
+
+    async fn retarget(&self, tx: mpsc::Sender<String>) {
+        *self.tx.lock().await = tx;
+    }
 }
 
 #[async_trait]
 impl EventBroadcaster for NodeEventBroadcaster {
     async fn on_state_changed(&self, state: &PlaybackState) {
-        // MpdStateSync always operates on nodes[0]
         if let Some(node) = state.nodes.first() {
             let update = NodeStateUpdate {
                 status: node.status,
@@ -62,7 +84,8 @@ impl EventBroadcaster for NodeEventBroadcaster {
                 projection_generation: self.projection_generation.load(Ordering::Relaxed),
             };
             if let Ok(json) = serde_json::to_string(&update) {
-                let _ = self.tx.send(json).await;
+                let tx = self.tx.lock().await;
+                let _ = tx.send(json).await;
             }
         }
     }
@@ -88,56 +111,14 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(6600);
 
-    info!("Kanade output node starting: name={node_name}");
-    info!("Connecting to server at {server_addr} …");
+    info!("Kanade output node starting: name={node_name}, server={server_addr}");
 
-    // Connect to the server with retry
-    let (ws_stream, _) = connect_async(&server_addr).await?;
-    info!("Connected to server");
-
-    let (mut ws_tx, mut ws_rx) = ws_stream.split();
-
-    // ── Handshake ─────────────────────────────────────────────────────────────
-    let registration = NodeRegistration {
-        name: node_name.clone(),
-    };
-    let reg_json = serde_json::to_string(&registration)?;
-    ws_tx.send(Message::Text(reg_json)).await?;
-
-    // Wait for NodeRegistrationAck from server (carries the server-assigned node_id)
-    let (node_id, media_base_url): (String, String) = loop {
-        match ws_rx.next().await {
-            Some(Ok(Message::Text(text))) => {
-                match serde_json::from_str::<NodeRegistrationAck>(&text) {
-                    Ok(ack) => break (ack.node_id, ack.media_base_url),
-                    Err(e) => {
-                        warn!("Unexpected message before ack: {e}");
-                    }
-                }
-            }
-            Some(Ok(Message::Close(_))) | None => {
-                error!("Server disconnected during handshake");
-                return Ok(());
-            }
-            _ => continue,
-        }
-    };
-
-    info!("Registration acknowledged; node_id={node_id}, media_base_url={media_base_url}");
-
-    // ── Set up local MPD renderer ──────────────────────────────────────────────
-    let renderer = Arc::new(MpdRenderer::new(
-        mpd_host.clone(),
-        mpd_port,
-        media_base_url,
-    ));
-
-    // ── Set up local PlaybackState for MpdStateSync ────────────────────────────
+    // ── Shared state (lives across reconnections) ─────────────────────────────
     let local_state: Arc<RwLock<PlaybackState>> = Arc::new(RwLock::new(PlaybackState {
         nodes: vec![Node {
-            id: node_id.clone(),
+            id: String::new(),
             name: node_name.clone(),
-            output_ids: vec![node_id.clone()],
+            output_ids: Vec::new(),
             queue: Vec::new(),
             current_index: None,
             status: PlaybackStatus::Stopped,
@@ -148,66 +129,175 @@ async fn main() -> Result<()> {
         }],
     }));
 
-    // Channel through which the broadcaster sends serialised NodeStateUpdate JSON
-    let (state_tx, mut state_rx) = mpsc::channel::<String>(64);
-
     let projection_generation = Arc::new(AtomicU64::new(0));
 
-    let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NodeEventBroadcaster {
-        tx: state_tx,
-        projection_generation: Arc::clone(&projection_generation),
-    });
-
-    let mut mpd_sync = MpdStateSync::new(
-        mpd_host.clone(),
-        mpd_port,
-        MpdClient::new(mpd_host, mpd_port),
-        Arc::clone(&local_state),
-        vec![Arc::clone(&broadcaster)],
+    let broadcaster: Arc<NodeEventBroadcaster> = Arc::new(NodeEventBroadcaster::new(
+        mpsc::channel::<String>(64).0,
         Arc::clone(&projection_generation),
-    );
+    ));
 
-    // Spawn MpdStateSync background task
-    tokio::spawn(async move {
-        mpd_sync.run().await;
-    });
+    // Spawn MPD state sync once — it runs for the lifetime of the process.
+    {
+        let state = Arc::clone(&local_state);
+        let gen = Arc::clone(&projection_generation);
+        let bcast = Arc::downgrade(&broadcaster);
+        let sync_mpd_host = mpd_host.clone();
+        tokio::spawn(async move {
+            let mut sync = MpdStateSync::new(
+                sync_mpd_host.clone(),
+                mpd_port,
+                MpdClient::new(sync_mpd_host, mpd_port),
+                state,
+                vec![Arc::new(WeakBroadcaster(bcast)) as Arc<dyn EventBroadcaster>],
+                gen,
+            );
+            sync.run().await;
+        });
+    }
 
-    // ── Main loop ─────────────────────────────────────────────────────────────
+    // ── Reconnect loop ───────────────────────────────────────────────────────
+    let mut backoff = Duration::from_secs(1);
+    let max_backoff = Duration::from_secs(30);
+
     loop {
-        tokio::select! {
-            // Incoming NodeCommand from server
-            msg = ws_rx.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<NodeCommand>(&text) {
-                            Ok(cmd) => {
-                                execute_command(cmd, &renderer, &projection_generation).await;
-                            }
-                            Err(e) => warn!("Unexpected message from server: {e}"),
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        info!("Server disconnected");
-                        break;
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(e)) => {
-                        error!("WebSocket error: {e}");
-                        break;
-                    }
+        match run_session(
+            &server_addr,
+            &node_name,
+            &mpd_host,
+            mpd_port,
+            &local_state,
+            &projection_generation,
+            &broadcaster,
+        )
+        .await
+        {
+            Ok(()) => {
+                // Clean close (shouldn't happen in normal operation, but handle
+                // it the same as a disconnect).
+                info!("Session ended; reconnecting in {backoff:?} …");
+            }
+            Err(e) => {
+                warn!("Session error: {e}; reconnecting in {backoff:?} …");
+            }
+        }
+
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(max_backoff);
+    }
+}
+
+/// Delegates to the current [`NodeEventBroadcaster`] via a weak reference,
+/// so the sync task can outlive individual sessions.
+struct WeakBroadcaster(std::sync::Weak<NodeEventBroadcaster>);
+
+#[async_trait]
+impl EventBroadcaster for WeakBroadcaster {
+    async fn on_state_changed(&self, state: &PlaybackState) {
+        if let Some(b) = self.0.upgrade() {
+            b.on_state_changed(state).await;
+        }
+    }
+}
+
+/// A single server session: connect, handshake, relay loop.
+/// Returns when the connection drops for any reason.
+async fn run_session(
+    server_addr: &str,
+    node_name: &str,
+    mpd_host: &str,
+    mpd_port: u16,
+    local_state: &Arc<RwLock<PlaybackState>>,
+    projection_generation: &Arc<AtomicU64>,
+    broadcaster: &Arc<NodeEventBroadcaster>,
+) -> Result<()> {
+    info!("Connecting to {server_addr} …");
+
+    let (ws_stream, _) = tokio::time::timeout(
+        Duration::from_secs(10),
+        connect_async(server_addr),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("connection timed out"))??;
+    info!("Connected");
+
+    let (mut ws_tx, mut ws_rx) = ws_stream.split();
+
+    // ── Handshake ─────────────────────────────────────────────────────────
+    let registration = NodeRegistration {
+        name: node_name.to_string(),
+    };
+    ws_tx
+        .send(Message::Text(serde_json::to_string(&registration)?))
+        .await?;
+
+    let (node_id, media_base_url): (String, String) = loop {
+        match tokio::time::timeout(Duration::from_secs(10), ws_rx.next()).await {
+            Err(_) => return Err(anyhow::anyhow!("handshake timed out")),
+            Ok(Some(Ok(Message::Text(text)))) => {
+                match serde_json::from_str::<NodeRegistrationAck>(&text) {
+                    Ok(ack) => break (ack.node_id, ack.media_base_url),
+                    Err(e) => warn!("Unexpected message before ack: {e}"),
                 }
             }
-            // Outgoing NodeStateUpdate to server
-            Some(json) = state_rx.recv() => {
-                if ws_tx.send(Message::Text(json)).await.is_err() {
-                    error!("Failed to send state update to server");
-                    break;
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                return Err(anyhow::anyhow!("server closed during handshake"));
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(e))) => return Err(anyhow::anyhow!("WS error during handshake: {e}")),
+        }
+    };
+
+    info!("Registered: node_id={node_id}, media_base_url={media_base_url}");
+
+    {
+        let mut state = local_state.write().await;
+        if let Some(node) = state.nodes.first_mut() {
+            node.id = node_id.clone();
+            node.output_ids = vec![node_id.clone()];
+        }
+    }
+
+    // ── Retarget broadcaster to this session's channel ────────────────────
+    {
+        let (state_tx, mut state_rx) = mpsc::channel::<String>(64);
+        broadcaster.retarget(state_tx).await;
+
+        // ── Renderer (rebuilt each session in case media_base_url changed) ─
+        let renderer = Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_base_url));
+
+        // ── Relay loop ───────────────────────────────────────────────────
+        loop {
+            tokio::select! {
+                msg = ws_rx.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(text))) => {
+                            match serde_json::from_str::<NodeCommand>(&text) {
+                                Ok(cmd) => {
+                                    execute_command(cmd, &renderer, projection_generation).await;
+                                }
+                                Err(e) => warn!("Unexpected message from server: {e}"),
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
+                            info!("Server disconnected");
+                            return Ok(());
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => {
+                            error!("WebSocket error: {e}");
+                            return Ok(());
+                        }
+                    }
+                }
+                Some(json) = state_rx.recv() => {
+                    if ws_tx.send(Message::Text(json)).await.is_err() {
+                        error!("Failed to send state update");
+                        return Ok(());
+                    }
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 /// Execute a [`NodeCommand`] against the local [`MpdRenderer`].
