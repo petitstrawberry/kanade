@@ -7,12 +7,12 @@ use ratatui::{
 };
 
 use kanade_core::{
-    model::{PlaybackStatus, RepeatMode, Zone},
+    model::{Node, PlaybackStatus, RepeatMode},
     state::PlaybackState,
 };
 
 pub fn draw(f: &mut Frame, area: Rect, state: &PlaybackState) {
-    let zone = state.zones.first();
+    let node = state.nodes.first();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -24,18 +24,18 @@ pub fn draw(f: &mut Frame, area: Rect, state: &PlaybackState) {
         ])
         .split(area);
 
-    render_track_info(f, chunks[0], zone);
-    render_progress(f, chunks[1], zone);
-    render_status(f, chunks[2], zone);
-    render_details(f, chunks[3], zone);
+    render_track_info(f, chunks[0], node);
+    render_progress(f, chunks[1], node);
+    render_status(f, chunks[2], node);
+    render_details(f, chunks[3], node);
 }
 
 fn dim(s: impl Into<String>) -> Span<'static> {
     Span::styled(s.into(), Style::default().fg(Color::DarkGray))
 }
 
-fn render_track_info(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
-    let current = zone.and_then(|z| z.current_track());
+fn render_track_info(f: &mut Frame, area: Rect, node: Option<&Node>) {
+    let current = node.and_then(|n| n.current_track());
 
     let lines: Vec<Line<'static>> = current
         .map(|t| {
@@ -88,11 +88,11 @@ fn render_track_info(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
     f.render_widget(content, area);
 }
 
-fn render_progress(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
-    let (duration, position) = zone
-        .and_then(|z| {
-            let d = z.current_track()?.duration_secs?;
-            Some((d, z.position_secs))
+fn render_progress(f: &mut Frame, area: Rect, node: Option<&Node>) {
+    let (duration, position) = node
+        .and_then(|n| {
+            let d = n.current_track()?.duration_secs?;
+            Some((d, n.position_secs))
         })
         .unwrap_or((0.0, 0.0));
 
@@ -116,22 +116,22 @@ fn render_progress(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
     f.render_widget(gauge, area);
 }
 
-fn render_status(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
-    let (status_str, volume, repeat_str, shuffle_str) = zone
-        .map(|z| {
-            let s = match z.status {
+fn render_status(f: &mut Frame, area: Rect, node: Option<&Node>) {
+    let (status_str, volume, repeat_str, shuffle_str) = node
+        .map(|n| {
+            let s = match n.status {
                 PlaybackStatus::Playing => "> Playing",
                 PlaybackStatus::Paused => "|| Paused",
                 PlaybackStatus::Stopped => "[] Stopped",
                 PlaybackStatus::Loading => "~ Loading",
             };
-            let r = match z.repeat {
+            let r = match n.repeat {
                 RepeatMode::Off => "",
                 RepeatMode::One => " [Repeat One]",
                 RepeatMode::All => " [Repeat All]",
             };
-            let sh = if z.shuffle { " [Shuffle]" } else { "" };
-            (s, z.volume, r, sh)
+            let sh = if n.shuffle { " [Shuffle]" } else { "" };
+            (s, n.volume, r, sh)
         })
         .unwrap_or(("[] Stopped", 0, "", ""));
 
@@ -147,8 +147,8 @@ fn render_status(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
     f.render_widget(content, area);
 }
 
-fn render_details(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
-    let current = zone.and_then(|z| z.current_track());
+fn render_details(f: &mut Frame, area: Rect, node: Option<&Node>) {
+    let current = node.and_then(|n| n.current_track());
 
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -163,13 +163,13 @@ fn render_details(f: &mut Frame, area: Rect, zone: Option<&Zone>) {
         spans.push(dim(format!(" {}  |  {}", fmt, sr)));
     }
 
-    // Zone info
-    if let Some(z) = zone {
-        spans.push(dim(format!("  |  Zone: {}", z.name)));
+    // Node info
+    if let Some(n) = node {
+        spans.push(dim(format!("  |  Node: {}", n.name)));
         spans.push(dim(format!(
             "  |  Queue: {}/{}",
-            z.current_index.map(|i| i + 1).unwrap_or(0),
-            z.queue.len()
+            n.current_index.map(|i| i + 1).unwrap_or(0),
+            n.queue.len()
         )));
     }
 

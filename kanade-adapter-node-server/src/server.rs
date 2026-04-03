@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use futures_util::{SinkExt, StreamExt};
 use kanade_core::{
     controller::Core,
-    model::{PlaybackStatus, RepeatMode, Zone},
+    model::{Node, PlaybackStatus, RepeatMode},
     ports::AudioOutput,
 };
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
@@ -94,7 +94,7 @@ async fn handle_node_connection(
         }
     };
 
-    // ── Assign a server-generated UUID as the node (= zone) identifier ───────
+    // ── Assign a server-generated UUID as the node identifier ────────────────
     let node_id = Uuid::new_v4().to_string();
 
     info!(
@@ -123,9 +123,9 @@ async fn handle_node_connection(
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(64);
     let output: Arc<dyn AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
 
-    // Register output and create a zone for this node
+    // Register output and create a node entry in the core
     core.register_output(node_id.clone(), Arc::clone(&output)).await;
-    core.add_zone(Zone {
+    core.add_node(Node {
         id: node_id.clone(),
         name: registration.name.clone(),
         output_ids: vec![node_id.clone()],
@@ -164,7 +164,7 @@ async fn handle_node_connection(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<NodeStateUpdate>(&text) {
                             Ok(update) => {
-                                core.sync_zone_state(
+                                core.sync_node_state(
                                     &node_id,
                                     update.status,
                                     update.position_secs,
@@ -190,5 +190,5 @@ async fn handle_node_connection(
     // ── Cleanup ───────────────────────────────────────────────────────────────
     info!("Output node disconnected: {}", node_id);
     core.unregister_output(&node_id).await;
-    core.remove_zone(&node_id).await;
+    core.remove_node(&node_id).await;
 }

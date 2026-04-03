@@ -5,8 +5,8 @@ pub enum CoreError {
     #[error("output error: {0}")]
     Output(String),
 
-    #[error("zone not found")]
-    ZoneNotFound,
+    #[error("node not found")]
+    NodeNotFound,
 
     #[error("queue is empty")]
     QueueEmpty,

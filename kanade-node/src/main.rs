@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use kanade_adapter_mpd::{MpdClient, MpdRenderer, MpdStateSync};
 use kanade_core::{
-    model::{PlaybackStatus, Zone},
+    model::{Node, PlaybackStatus},
     ports::{AudioOutput, EventBroadcaster},
     state::PlaybackState,
 };
@@ -51,13 +51,13 @@ struct NodeEventBroadcaster {
 #[async_trait]
 impl EventBroadcaster for NodeEventBroadcaster {
     async fn on_state_changed(&self, state: &PlaybackState) {
-        // MpdStateSync always operates on zones[0]
-        if let Some(zone) = state.zones.first() {
+        // MpdStateSync always operates on nodes[0]
+        if let Some(node) = state.nodes.first() {
             let update = NodeStateUpdate {
-                status: zone.status,
-                position_secs: zone.position_secs,
-                volume: zone.volume,
-                current_index: zone.current_index,
+                status: node.status,
+                position_secs: node.position_secs,
+                volume: node.volume,
+                current_index: node.current_index,
             };
             if let Ok(json) = serde_json::to_string(&update) {
                 let _ = self.tx.send(json).await;
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
 
     // ── Set up local PlaybackState for MpdStateSync ────────────────────────────
     let local_state: Arc<RwLock<PlaybackState>> = Arc::new(RwLock::new(PlaybackState {
-        zones: vec![Zone {
+        nodes: vec![Node {
             id: node_id.clone(),
             name: node_name.clone(),
             output_ids: vec![node_id.clone()],

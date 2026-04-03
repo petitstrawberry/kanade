@@ -7,7 +7,7 @@
 //!
 //! 1. The output node connects to the server's node endpoint.
 //! 2. The node sends a [`NodeRegistration`] message with a human-readable name.
-//! 3. The server assigns a UUID as the node (= zone) identifier and replies
+//! 3. The server assigns a UUID as the node identifier and replies
 //!    with a [`NodeRegistrationAck`] that contains both the assigned `node_id`
 //!    and the media base URL the node must use when constructing track URIs.
 //!
@@ -29,7 +29,7 @@ pub struct NodeRegistration {
 
 /// Sent by the server in response to a successful [`NodeRegistration`].
 ///
-/// `node_id` is the UUID the server assigned to this node (= zone ID).
+/// `node_id` is the UUID the server assigned to this node.
 /// `media_base_url` is the HTTP base URL of the server's media endpoint
 /// (e.g. `http://192.168.1.10:8081`). The node must use this URL when
 /// constructing track URIs for its local audio backend (e.g. MPD).

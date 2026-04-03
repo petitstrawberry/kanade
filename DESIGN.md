@@ -8,7 +8,7 @@
 │                                                                       │
 │  ┌─────────────────────────────────────────────────────────────┐    │
 │  │                          Core                                │    │
-│  │  Zones, Queue, Playback State, Library                       │    │
+│  │  Nodes, Queue, Playback State, Library                       │    │
 │  └──────┬──────────────────────────────┬────────────────────────┘    │
 │         │                              │                             │
 │  ┌──────▼──────────┐       ┌───────────▼──────────┐                 │
@@ -61,14 +61,14 @@
 2. **Clients and server have independent lifetimes** — start/stop/restart independently.
 3. **Output nodes are separate processes** — they connect to the server via the kanade protocol and can run on different machines.
 4. **MPD is one output backend** — the output node (`kanade-node`) drives MPD internally. Other backends (ALSA, CoreAudio, etc.) are future possibilities.
-5. **Zones from day one** — a Zone groups one or more Outputs and owns its own queue + playback state.
+5. **Nodes from day one** — a Node groups one or more Outputs and owns its own queue + playback state.
 6. **Hexagonal architecture** — core never depends on I/O adapters.
 
 ## Core Concepts
 
-### Zone
+### Node
 
-A Zone is a logical audio destination. Each zone has:
+A Node is a logical audio destination. Each node has:
 
 - A name
 - One or more **Outputs** (physical devices that produce sound)
@@ -77,7 +77,7 @@ A Zone is a logical audio destination. Each zone has:
 - Its own **volume**, **shuffle**, **repeat** settings
 
 ```
-Zone "Living Room"
+Node "Living Room"
 ├── Outputs: [RemoteNodeOutput → kanade-node → MPD]
 ├── Queue: [Track A, Track B, Track C]
 ├── State: Playing, position 1:23
@@ -86,7 +86,7 @@ Zone "Living Room"
 └── Repeat: All
 ```
 
-When a zone plays, it sends audio to all its outputs simultaneously.
+When a node plays, it sends audio to all its outputs simultaneously.
 
 ### Output
 
@@ -115,7 +115,7 @@ The kanade protocol is a WebSocket JSON protocol used exclusively for communicat
 
 1. Output node connects to `NODE_ADDR` (default `0.0.0.0:8082`).
 2. Node → Server: `NodeRegistration` — announces a human-readable `name`.
-3. Server → Node: `NodeRegistrationAck` — assigns a UUID as the `node_id` (= zone ID) and provides the `media_base_url` the node must use when constructing track URIs for its local audio backend.
+3. Server → Node: `NodeRegistrationAck` — assigns a UUID as the `node_id` and provides the `media_base_url` the node must use when constructing track URIs for its local audio backend.
 
 #### Commands (Server → Node)
 
@@ -156,7 +156,7 @@ NodeServer.accept()
   → NodeRegistration handshake
   → create RemoteNodeOutput (backed by channel)
   → Core.register_output(node_id, remote_output)
-  → Core.add_zone(Zone { id: node_id, ... })
+  → Core.add_node(Node { id: node_id, ... })
   → relay loop: NodeCommand ↔ NodeStateUpdate
 ```
 
@@ -178,7 +178,7 @@ main()
 A client:
 1. Connects to the server via WebSocket (port 8080)
 2. Sends commands (play, pause, browse library, add to queue, etc.)
-3. Receives state pushes (playback state, zone changes, scan progress)
+3. Receives state pushes (playback state, node changes, scan progress)
 4. Renders UI
 
 A client holds NO persistent state. Everything comes from the server.
@@ -187,7 +187,7 @@ A client holds NO persistent state. Everything comes from the server.
 
 ```
 kanade/
-├── kanade-core/                 Domain models, zone/output traits, Core
+├── kanade-core/                 Domain models, node/output traits, Core
 ├── kanade-db/                   SQLite persistence, FTS5
 ├── kanade-scanner/              Library scanner (lofty + dsf-meta)
 ├── kanade-node-protocol/        Shared kanade protocol message types
@@ -220,13 +220,13 @@ pub struct Track {
 }
 ```
 
-### Zone
+### Node
 
 ```rust
-pub struct Zone {
+pub struct Node {
     pub id: String,              // matches node_id of the connected output node
     pub name: String,
-    pub output_ids: Vec<String>, // output IDs (one per zone in typical setup)
+    pub output_ids: Vec<String>, // output IDs (one per node in typical setup)
     pub queue: Vec<Track>,
     pub current_index: Option<usize>,
     pub status: PlaybackStatus,
@@ -263,33 +263,33 @@ Two message types:
 
 **Commands** (fire-and-forget, no response):
 ```json
-{"cmd": "play", "zone_id": "..."}
-{"cmd": "pause", "zone_id": "..."}
-{"cmd": "stop", "zone_id": "..."}
-{"cmd": "next", "zone_id": "..."}
-{"cmd": "previous", "zone_id": "..."}
-{"cmd": "seek", "zone_id": "...", "position_secs": 30.0}
-{"cmd": "set_volume", "zone_id": "...", "volume": 75}
-{"cmd": "set_shuffle", "zone_id": "...", "shuffle": true}
-{"cmd": "set_repeat", "zone_id": "...", "repeat": "all"}
-{"cmd": "add_to_queue", "zone_id": "...", "track": {...}}
-{"cmd": "clear_queue", "zone_id": "..."}
+{"cmd": "play", "node_id": "..."}
+{"cmd": "pause", "node_id": "..."}
+{"cmd": "stop", "node_id": "..."}
+{"cmd": "next", "node_id": "..."}
+{"cmd": "previous", "node_id": "..."}
+{"cmd": "seek", "node_id": "...", "position_secs": 30.0}
+{"cmd": "set_volume", "node_id": "...", "volume": 75}
+{"cmd": "set_shuffle", "node_id": "...", "shuffle": true}
+{"cmd": "set_repeat", "node_id": "...", "repeat": "all"}
+{"cmd": "add_to_queue", "node_id": "...", "track": {...}}
+{"cmd": "clear_queue", "node_id": "..."}
 ```
 
 **Requests** (expect response with matching `req_id`):
 ```json
-{"req_id": 1, "req": "get_zones"}
+{"req_id": 1, "req": "get_nodes"}
 {"req_id": 2, "req": "get_albums"}
 {"req_id": 3, "req": "get_album_tracks", "album_id": "..."}
 {"req_id": 4, "req": "search", "query": "..."}
-{"req_id": 5, "req": "get_queue", "zone_id": "..."}
+{"req_id": 5, "req": "get_queue", "node_id": "..."}
 ```
 
 ### Server → Client
 
 **State push** (sent on any state change):
 ```json
-{"type": "state", "zones": [{"id": "...", "name": "Living Room", "status": "playing", ...}]}
+{"type": "state", "nodes": [{"id": "...", "name": "Living Room", "status": "playing", ...}]}
 ```
 
 **Response** (replies to requests):
@@ -303,9 +303,9 @@ Two message types:
 
 ### Playback
 ```
-Client: {"cmd": "play", "zone_id": "living-room"}
-  → WsServer → Core.play_zone("living-room")
-    → Core sets zone.status = Playing
+Client: {"cmd": "play", "node_id": "living-room"}
+  → WsServer → Core.play_node("living-room")
+    → Core sets node.status = Playing
     → Core forwards to RemoteNodeOutput: output.play()
       → NodeCommand::Play sent over WebSocket to kanade-node
         → kanade-node → MpdRenderer.play() → MPD: "play" command
@@ -319,7 +319,7 @@ MpdStateSync (on kanade-node) polls MPD every 500ms
   → NodeEventBroadcaster converts state to NodeStateUpdate JSON
   → Sent over WebSocket to server
     → NodeServer receives NodeStateUpdate
-    → Core.sync_zone_state(...) updates zone state + broadcasts
+    → Core.sync_node_state(...) updates node state + broadcasts
   → All clients receive updated {"type": "state", ...}
 ```
 
@@ -331,7 +331,7 @@ Client: {"req_id": 1, "req": "get_albums"}
 Client: {"req_id": 2, "req": "get_album_tracks", "album_id": "xyz"}
   → WS server → DB.get_tracks_by_album_id("xyz")
   → WS server replies: {"type": "response", "req_id": 2, "data": {"tracks": [...]}}
-Client: {"cmd": "add_to_queue", "zone_id": "living-room", "track": {...}}
+Client: {"cmd": "add_to_queue", "node_id": "living-room", "track": {...}}
   → WS server → Core.add_to_queue("living-room", track)
     → Core forwards: output.add([file_path])
     → Core broadcasts state
@@ -352,7 +352,7 @@ Server startup → scanner.run()
 | State ownership | Core is sole owner | Clients are stateless; no state divergence |
 | Output abstraction | `AudioOutput` trait | Output node is one backend among many; swap freely |
 | Output node separation | kanade protocol (WS) | Server and nodes can run on different machines |
-| Zone concept | From day one | Multi-room, per-zone queue/volume/repeat |
+| Node concept | From day one | Multi-room, per-node queue/volume/repeat |
 | Client protocol | WebSocket JSON | Language-agnostic, bidirectional, fire-and-forget + req/res |
 | Metadata source | File tags only (lofty + dsf-meta) | No external APIs; deterministic IDs via SHA-256 |
 | ID scheme | SHA-256 of natural key | Deterministic, no drift between runs |
@@ -381,7 +381,7 @@ Server startup → scanner.run()
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NODE_NAME` | `node` | Human-readable zone name shown in clients (ID is auto-assigned by server) |
+| `NODE_NAME` | `node` | Human-readable node name shown in clients (ID is auto-assigned by server) |
 | `SERVER_ADDR` | `ws://127.0.0.1:8082` | kanade server node endpoint URL |
 | `MPD_HOST` | `127.0.0.1` | Local MPD host |
 | `MPD_PORT` | `6600` | Local MPD port |
