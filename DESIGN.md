@@ -3,56 +3,23 @@
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       Kanade Server (daemon)                         │
-│                                                                       │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                          Core                                │    │
-│  │  Nodes, Queue, Playback State, Library                       │    │
-│  └──────┬──────────────────────────────┬────────────────────────┘    │
-│         │                              │                             │
-│  ┌──────▼──────────┐       ┌───────────▼──────────┐                 │
-│  │  kanade-db      │       │  kanade-scanner       │                 │
-│  │  SQLite + FTS5  │       │  bg scan loop         │                 │
-│  └─────────────────┘       └──────────────────────┘                 │
-│                                                                       │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  kanade-adapter-node-server  (port 8082)                       │  │
-│  │  Accepts output node connections via kanade protocol (WS)      │  │
-│  │  Each connected node → RemoteNodeOutput (AudioOutput impl)     │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│                                                                       │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  kanade-adapter-ws (8080)   kanade-adapter-openhome (8090)  │    │
-│  │  WebSocket server           OpenHome/UPnP                    │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  kanade-server-http (8081)                                   │    │
-│  │  Serves audio files and artwork over HTTP                    │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-└────────────────────────────────────────┬────────────────────────────┘
-                                          │  kanade protocol
-                                          │  WebSocket JSON (port 8082)
-              ┌───────────────────────────▼──────────────────────────────┐
-              │                  kanade-node (output node)                │
-              │                                                            │
-              │  ┌──────────────────────────────────────────────────┐    │
-              │  │  kanade-adapter-mpd                               │    │
-              │  │  MpdRenderer + MpdStateSync                       │    │
-              │  └───────────────────────┬────────────────────────────┘    │
-              │                          │  MPD protocol (port 6600)       │
-              │                  ┌───────▼───────┐                         │
-              │                  │  MPD Daemon   │                         │
-              │                  └───────────────┘                         │
-              └────────────────────────────────────────────────────────────┘
-                        │
-                        │  WebSocket (JSON)  (port 8080)
-                        │
-          ┌─────────────▼──────┐  ┌───────────────┐  ┌────────────────┐
-          │  kanade-tui         │  │  Web (React)   │  │  SwiftUI       │
-          │  (client)           │  │  (client)      │  │  (client)      │
-          └────────────────────┘  └───────────────┘  └────────────────┘
+  Clients                             Kanade Server                           Output Nodes
+  ┌──────────┐                       ┌──────────────────┐                 ┌──────────────┐
+  │ kanade-  │  WS :8080, HTTP: 8081  │                  │   WS :8082      │ living-room  │
+  │ web      │─────────────────────▶ │  kanade-core     │────────────────▶│  (MPD)       │
+  └──────────┘                       │  State · Queue   │                 └──────────────┘
+                                     │  Controller      │                 ┌──────────────┐
+                                     │                  │   WS :8082      │  study       │
+                                     │  kanade-db       │────────────────▶│  (MPD)       │
+                                     │  SQLite + FTS5   │                 └──────────────┘
+  ┌──────────┐  WS :8080             │                  │   WS :8082      ┌──────────────┐
+  │ kanade-  │─────────────────────▶ │  kanade-scanner  │────────────────▶│  kitchen     │
+  │ tui      │                       └──────────────────┘                 │  (MPD)       │
+  └──────────┘                                                            └──────────────┘
+
+  WS   :8080   Client Subprotocol   (server ↔ web, tui)
+  WS   :8082   Node Subprotocol      (server ↔ output nodes)
+  HTTP :8081 Media Surface         (track streaming + artwork)
 ```
 
 ## Principles
