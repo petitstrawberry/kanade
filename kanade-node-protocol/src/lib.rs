@@ -6,10 +6,10 @@
 //! # Handshake
 //!
 //! 1. The output node connects to the server's node endpoint.
-//! 2. The node sends a [`NodeRegistration`] message.
-//! 3. The server replies with a [`NodeRegistrationAck`] that contains the
-//!    media base URL the node must use when constructing track URIs for its
-//!    local audio backend.
+//! 2. The node sends a [`NodeRegistration`] message with a human-readable name.
+//! 3. The server assigns a UUID as the node (= zone) identifier and replies
+//!    with a [`NodeRegistrationAck`] that contains both the assigned `node_id`
+//!    and the media base URL the node must use when constructing track URIs.
 //!
 //! # Ongoing communication
 //!
@@ -20,20 +20,22 @@ use kanade_core::model::PlaybackStatus;
 use serde::{Deserialize, Serialize};
 
 /// Sent by the output node immediately after the WebSocket connection is
-/// established. The `node_id` must be unique across all connected nodes.
+/// established.  The node only supplies a human-readable `name`; the server
+/// assigns the node's identifier automatically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeRegistration {
-    pub node_id: String,
     pub name: String,
 }
 
 /// Sent by the server in response to a successful [`NodeRegistration`].
 ///
+/// `node_id` is the UUID the server assigned to this node (= zone ID).
 /// `media_base_url` is the HTTP base URL of the server's media endpoint
 /// (e.g. `http://192.168.1.10:8081`). The node must use this URL when
 /// constructing track URIs for its local audio backend (e.g. MPD).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeRegistrationAck {
+    pub node_id: String,
     pub media_base_url: String,
 }
 

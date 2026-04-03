@@ -114,8 +114,8 @@ The kanade protocol is a WebSocket JSON protocol used exclusively for communicat
 #### Handshake
 
 1. Output node connects to `NODE_ADDR` (default `0.0.0.0:8082`).
-2. Node → Server: `NodeRegistration` — announces `node_id` and human-readable `name`.
-3. Server → Node: `NodeRegistrationAck` — provides the `media_base_url` the node must use when constructing track URIs for its local audio backend.
+2. Node → Server: `NodeRegistration` — announces a human-readable `name`.
+3. Server → Node: `NodeRegistrationAck` — assigns a UUID as the `node_id` (= zone ID) and provides the `media_base_url` the node must use when constructing track URIs for its local audio backend.
 
 #### Commands (Server → Node)
 
@@ -381,8 +381,7 @@ Server startup → scanner.run()
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NODE_ID` | `node` | Unique node identifier |
-| `NODE_NAME` | value of `NODE_ID` | Human-readable zone name shown in clients |
+| `NODE_NAME` | `node` | Human-readable zone name shown in clients (ID is auto-assigned by server) |
 | `SERVER_ADDR` | `ws://127.0.0.1:8082` | kanade server node endpoint URL |
 | `MPD_HOST` | `127.0.0.1` | Local MPD host |
 | `MPD_PORT` | `6600` | Local MPD port |

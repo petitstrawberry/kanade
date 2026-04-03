@@ -6,12 +6,14 @@
 //! reported back to the server as [`NodeStateUpdate`] messages so the server's
 //! [`PlaybackState`] stays in sync.
 //!
+//! The server automatically assigns a unique identifier (UUID) to each
+//! connected node.  The node only provides a human-readable name.
+//!
 //! # Configuration (environment variables)
 //!
 //! | Variable        | Default               | Description                        |
 //! |-----------------|-----------------------|------------------------------------|
-//! | `NODE_ID`       | `node`                | Unique node identifier             |
-//! | `NODE_NAME`     | value of `NODE_ID`    | Human-readable zone name           |
+//! | `NODE_NAME`     | `node`                | Human-readable name for this node  |
 //! | `SERVER_ADDR`   | `ws://127.0.0.1:8082` | kanade server node endpoint        |
 //! | `MPD_HOST`      | `127.0.0.1`           | Local MPD host                     |
 //! | `MPD_PORT`      | `6600`                | Local MPD port                     |
@@ -75,8 +77,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let node_id = std::env::var("NODE_ID").unwrap_or_else(|_| "node".to_string());
-    let node_name = std::env::var("NODE_NAME").unwrap_or_else(|_| node_id.clone());
+    let node_name = std::env::var("NODE_NAME").unwrap_or_else(|_| "node".to_string());
     let server_addr = std::env::var("SERVER_ADDR")
         .unwrap_or_else(|_| "ws://127.0.0.1:8082".to_string());
     let mpd_host = std::env::var("MPD_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -85,7 +86,7 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(6600);
 
-    info!("Kanade output node starting: id={node_id}, name={node_name}");
+    info!("Kanade output node starting: name={node_name}");
     info!("Connecting to server at {server_addr} …");
 
     // Connect to the server with retry
@@ -96,18 +97,17 @@ async fn main() -> Result<()> {
 
     // ── Handshake ─────────────────────────────────────────────────────────────
     let registration = NodeRegistration {
-        node_id: node_id.clone(),
         name: node_name.clone(),
     };
     let reg_json = serde_json::to_string(&registration)?;
     ws_tx.send(Message::Text(reg_json)).await?;
 
-    // Wait for NodeRegistrationAck from server
-    let media_base_url: String = loop {
+    // Wait for NodeRegistrationAck from server (carries the server-assigned node_id)
+    let (node_id, media_base_url): (String, String) = loop {
         match ws_rx.next().await {
             Some(Ok(Message::Text(text))) => {
                 match serde_json::from_str::<NodeRegistrationAck>(&text) {
-                    Ok(ack) => break ack.media_base_url,
+                    Ok(ack) => break (ack.node_id, ack.media_base_url),
                     Err(e) => {
                         warn!("Unexpected message before ack: {e}");
                     }
@@ -121,7 +121,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!("Registration acknowledged; media_base_url={media_base_url}");
+    info!("Registration acknowledged; node_id={node_id}, media_base_url={media_base_url}");
 
     // ── Set up local MPD renderer ──────────────────────────────────────────────
     let renderer = Arc::new(MpdRenderer::new(

@@ -11,6 +11,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use crate::output::RemoteNodeOutput;
 
@@ -93,13 +94,19 @@ async fn handle_node_connection(
         }
     };
 
+    // ── Assign a server-generated UUID as the node (= zone) identifier ───────
+    let node_id = Uuid::new_v4().to_string();
+
     info!(
-        "Output node registered: id={}, name={}",
-        registration.node_id, registration.name
+        "Output node registered: name={}, assigned id={}",
+        registration.name, node_id
     );
 
-    // Send registration acknowledgement
-    let ack = NodeRegistrationAck { media_base_url };
+    // Send registration acknowledgement with the server-assigned node_id
+    let ack = NodeRegistrationAck {
+        node_id: node_id.clone(),
+        media_base_url,
+    };
     match serde_json::to_string(&ack) {
         Ok(json) => {
             if ws_tx.send(Message::Text(json)).await.is_err() {
@@ -115,8 +122,6 @@ async fn handle_node_connection(
     // ── Set up RemoteNodeOutput ───────────────────────────────────────────────
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(64);
     let output: Arc<dyn AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
-
-    let node_id = registration.node_id.clone();
 
     // Register output and create a zone for this node
     core.register_output(node_id.clone(), Arc::clone(&output)).await;
