@@ -334,7 +334,6 @@
   }
 
   .mode-switcher button.active {
-    background-color: var(--bg-highlight);
     color: var(--accent);
   }
 
