@@ -20,6 +20,11 @@ enum ArtResult {
 }
 
 fn extract_embedded_picture(file_path: &str) -> Option<lofty::picture::Picture> {
+    let path_lower = file_path.to_lowercase();
+    if path_lower.ends_with(".dsf") {
+        return extract_dsf_picture(file_path);
+    }
+
     let tagged_file = Probe::open(file_path).ok()?.read().ok()?;
     let tag = match tagged_file.primary_tag() {
         Some(t) => t,
@@ -30,6 +35,132 @@ fn extract_embedded_picture(file_path: &str) -> Option<lofty::picture::Picture> 
         .find(|p| matches!(p.pic_type(), lofty::picture::PictureType::CoverFront))
         .cloned()
         .or_else(|| tag.pictures().first().cloned())
+}
+
+fn extract_dsf_picture(file_path: &str) -> Option<lofty::picture::Picture> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f = std::fs::File::open(file_path).ok()?;
+
+    // DSF format: "DSD " chunk (12 bytes) → "fmt " chunk (variable) → ID3v2 tag
+    f.seek(SeekFrom::Start(12)).ok()?;
+    let mut fmt_size_buf = [0u8; 8];
+    f.read_exact(&mut fmt_size_buf).ok()?;
+    let fmt_chunk_size = u64::from_le_bytes(fmt_size_buf);
+    let id3_offset = 12 + fmt_chunk_size as u64;
+
+    f.seek(SeekFrom::Start(id3_offset)).ok()?;
+    let mut header = [0u8; 3];
+    f.read_exact(&mut header).ok()?;
+    if &header != b"ID3" {
+        return None;
+    }
+
+    let id3_data = {
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).ok()?;
+        buf
+    };
+
+    parse_id3v2_apic(&id3_data)
+}
+
+fn parse_id3v2_apic(data: &[u8]) -> Option<lofty::picture::Picture> {
+    if data.len() < 10 || &data[0..3] != b"ID3" {
+        return None;
+    }
+
+    let version = data[3];
+    let flags = data[5];
+    let size = if version == 4 {
+        ((data[6] as u64) << 21) | ((data[7] as u64) << 14) | ((data[8] as u64) << 7) | (data[9] as u64)
+    } else {
+        ((data[6] as u64) << 24) | ((data[7] as u64) << 16) | ((data[8] as u64) << 8) | (data[9] as u64)
+    } as usize;
+
+    let has_footer = version == 4 && (flags & 0x10) != 0;
+    let total_size = 10 + size + if has_footer { 10 } else { 0 };
+    if total_size > data.len() {
+        return None;
+    }
+
+    let frames_data = &data[10..10 + size];
+    find_apic_frame(frames_data, version)
+}
+
+fn find_apic_frame(data: &[u8], version: u8) -> Option<lofty::picture::Picture> {
+    let mut pos = 0;
+    let synchsafe = version == 4;
+
+    while pos + 10 <= data.len() {
+        let frame_id = &data[pos..pos + 4];
+        if frame_id == [0; 4] {
+            break;
+        }
+
+        let frame_size = if synchsafe {
+            ((data[pos + 4] as usize) << 21)
+                | ((data[pos + 5] as usize) << 14)
+                | ((data[pos + 6] as usize) << 7)
+                | (data[pos + 7] as usize)
+        } else {
+            ((data[pos + 4] as usize) << 24)
+                | ((data[pos + 5] as usize) << 16)
+                | ((data[pos + 6] as usize) << 8)
+                | (data[pos + 7] as usize)
+        };
+
+        let frame_flags: [u8; 2] = data[pos + 8..pos + 10].try_into().ok()?;
+        let frame_data = data.get(pos + 10..pos + 10 + frame_size)?;
+        let frame_id_str = std::str::from_utf8(frame_id).ok()?;
+
+        if frame_id_str == "APIC" {
+            return Some(parse_apic_data(frame_data, version)?);
+        }
+
+        let has_header = version == 4 && (frame_flags[1] & 0x01) != 0;
+        let skip = if has_header { 4 } else { 0 };
+        pos += 10 + frame_size + skip;
+    }
+
+    None
+}
+
+fn parse_apic_data(data: &[u8], version: u8) -> Option<lofty::picture::Picture> {
+    let mut pos = 0;
+
+    let _encoding = data.get(pos)?;
+    pos += 1;
+
+    let mime_end = memchr::memchr(0, &data[pos..])?;
+    let mime = std::str::from_utf8(&data[pos..pos + mime_end]).ok()?.to_string();
+    pos += mime_end + 1;
+
+    let pic_type = lofty::picture::PictureType::from_u8(data[pos]);
+    pos += 1;
+
+    let desc_end = memchr::memchr(0, &data[pos..])?;
+    pos += desc_end + 1;
+
+    if version == 1 || version == 2 {
+        if pos < data.len() {
+            pos += 1;
+        }
+    }
+
+    let pic_data = data.get(pos..)?;
+    if pic_data.is_empty() {
+        return None;
+    }
+
+    let mime_type = Some(lofty::picture::MimeType::from_str(&mime));
+
+    Some(lofty::picture::Picture::new_unchecked(
+        pic_type,
+        mime_type,
+        None,
+        pic_data.to_vec(),
+    ))
 }
 
 async fn serve_bytes(

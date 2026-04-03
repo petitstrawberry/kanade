@@ -9,4 +9,5 @@ kanade-core = { path = "../kanade-core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 lofty = { workspace = true }
+memchr = "2"
 anyhow = { workspace = true }
