@@ -5,50 +5,67 @@
 Kanade sits between your music collection and your audio output, providing a
 unified playback API that multiple frontends can consume simultaneously.
 
-It uses [MPD](https://www.musicpd.org/) as its audio backend and exposes
-playback control over WebSocket (JSON), OpenHome (UPnP/SOAP), and a built-in
-TUI — all driven by a single shared state.
+Output nodes connect to the server over the [Kanade Protocol](protocols.md)
+and drive local audio backends (MPD, etc.). Clients control playback via
+WebSocket (JSON), OpenHome (UPnP/SOAP), or a built-in TUI — all driven by a
+single shared state.
 
 ## Features
 
-- **MPD backend** — delegates actual audio playback to a local MPD daemon
+- **Node-based playback** — logical nodes with per-node queues, volume,
+  shuffle and repeat; multiple nodes can run on different machines
+- **Output node separation** — audio backends run as separate processes
+  (`kanade-node`) and connect to the server over WebSocket
+- **MPD backend** — the reference output node drives a local
+  [MPD](https://www.musicpd.org/) daemon; other backends are possible
 - **Library management** — scans music directories, extracts metadata with
   [lofty](https://github.com/Serial-ATA/lofty-rs), indexes in SQLite with
   FTS5 full-text search
-- **Built-in TUI** — terminal UI via [ratatui](https://github.com/ratatui/ratatui);
-  runs in-process for zero-latency state access
 - **WebSocket API** — JSON protocol for remote clients (web, CLI, etc.)
 - **OpenHome/UPnP** — SOAP/XML adapter for control points like JPLAY
-- **Hexagonal architecture** — core domain is adapter-agnostic; swap MPD for
-  another renderer without touching business logic
+- **Hexagonal architecture** — core domain is adapter-agnostic; swap
+  backends without touching business logic
 
 ## Architecture
 
 ```
-                         ┌─────────────────────────────┐
-                         │          kanade-core         │
-                         │  PlaybackState (RwLock)      │
-                         │  CoreController              │
-                         │  Port traits                 │
-                         └──┬───────────────────────┬───┘
-                            │                       │
-                AudioRenderer                   EventBroadcaster
-               (output port)                   (broadcast port)
-                            │                       │
-              ┌─────────────▼──────┐    ┌──────────▼──────────┐
-              │ kanade-adapter-mpd │    │ kanade-adapter-ws   │
-              │ (MPD TCP control)  │    │ (WebSocket / JSON)  │
-              └────────────────────┘    ├─────────────────────┤
-                                       │ kanade-adapter-oh   │
-                                       │ (OpenHome / SOAP)   │
-                                       └─────────────────────┘
-
-                         ┌─────────────────────────────┐
-                         │          kanade-db           │
-                         │  SQLite + FTS5               │
-                         │  Tracks, Albums, Artists      │
-                         └─────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        Kanade Server                              │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │                     kanade-core                           │    │
+│  │  PlaybackState · Nodes · Queue · Controller · Port traits │    │
+│  └──────┬──────────────────────────────────┬────────────────┘    │
+│         │                                  │                     │
+│  ┌──────▼──────────┐          ┌─────────────▼─────────────────┐  │
+│  │  kanade-db      │          │  kanade-scanner               │  │
+│  │  SQLite + FTS5  │          │  background scan loop         │  │
+│  └─────────────────┘          └───────────────────────────────┘  │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  kanade-adapter-node-server  (port 8082)                  │    │
+│  │  Accepts output nodes · Kanade Protocol (WS)              │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                    │
+│  ┌────────────────────┐  ┌──────────────────┐  ┌───────────────┐ │
+│  │ kanade-adapter-ws  │  │ kanade-adapter-  │  │ kanade-server-│ │
+│  │ (WS client API)    │  │ openhome (UPnP)  │  │ http (media)  │ │
+│  │ :8080              │  │ :8090            │  │ :8081         │ │
+│  └────────────────────┘  └──────────────────┘  └───────────────┘ │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │  Kanade Protocol (WS :8082)
+         ┌─────────────────────▼──────────────────────────────┐
+         │               kanade-node (output node)             │
+         │  kanade-adapter-mpd  →  MPD daemon (:6600)         │
+         └────────────────────────────────────────────────────┘
+                     │
+         ┌───────────▼──────────┐  ┌────────────┐  ┌─────────┐
+         │  kanade-web (Svelte) │  │ kanade-tui │  │ OpenHome│
+         │  (WS :8080)          │  │ (WS :8080) │  │ control │
+         └──────────────────────┘  └────────────┘  └─────────┘
 ```
+
+See [DESIGN.md](DESIGN.md) for detailed design decisions and data flow.
 
 ## Quick Start
 
@@ -57,52 +74,87 @@ TUI — all driven by a single shared state.
 - Rust stable toolchain (or [Nix](https://nixos.org/) with the provided flake)
 - A running [MPD](https://www.musicpd.org/) daemon
 
-### Build & Run
+### 1. Start the server
 
 ```sh
-cargo run
+MUSIC_DIR=/path/to/music cargo run -p kanade --release
 ```
 
-### Configuration
+### 2. Start an output node
 
-| Environment Variable | Default        | Description                       |
-| -------------------- | -------------- | --------------------------------- |
-| `MPD_HOST`           | `127.0.0.1`    | MPD daemon host                   |
-| `MPD_PORT`           | `6600`         | MPD daemon port                   |
-| `WS_ADDR`            | `0.0.0.0:8080` | WebSocket server bind address     |
-| `OH_ADDR`            | `0.0.0.0:8090` | OpenHome HTTP server bind address |
-| `MUSIC_DIR`          | -              | Root music directory for scanning |
-| `DB_PATH`            | `kanade.db`    | SQLite database file path         |
-| `SCAN_INTERVAL_SECS` | `300`          | Interval between periodic scans   |
-| `RUST_LOG`           | `kanade=info`  | Log level (tracing filter)        |
+```sh
+cargo run -p kanade-node --release
+```
+
+The first node to connect is assigned the id `"default"` and is the target
+for clients that don't specify a node.
+
+### 3. Connect a client
+
+- **Web**: open `kanade-web/` (Svelte) — `?server=ws://HOST:8080`
+- **TUI**: `cargo run -p kanade-tui --release`
+- **OpenHome**: point any control point at `HOST:8090`
 
 ### Nix Dev Shell
 
 ```sh
 direnv allow   # or: nix develop
-cargo run
 ```
 
-## Development
+## Configuration
 
-```sh
-cargo build
-cargo test
-cargo run
-```
+### Server (`kanade`)
+
+| Variable                | Default                        | Description                            |
+| ----------------------- | ------------------------------ | -------------------------------------- |
+| `MUSIC_DIR`             | —                              | Root music directory for scanning      |
+| `DB_PATH`               | `kanade.db`                    | SQLite database file path              |
+| `SCAN_INTERVAL_SECS`    | `300`                          | Interval between periodic scans        |
+| `MEDIA_ADDR`            | `0.0.0.0:8081`                 | HTTP media server bind address         |
+| `MEDIA_PUBLIC_BASE_URL` | `http://127.0.0.1:8081`       | Public base URL for media file access  |
+| `NODE_ADDR`             | `0.0.0.0:8082`                 | Kanade protocol listen address         |
+| `WS_ADDR`               | `0.0.0.0:8080`                 | WebSocket client API bind address      |
+| `OH_ADDR`               | `0.0.0.0:8090`                 | OpenHome HTTP server bind address      |
+| `RUST_LOG`              | `kanade=info,kanade_core=debug`| Log level (tracing filter)             |
+
+### Output Node (`kanade-node`)
+
+| Variable     | Default                  | Description                            |
+| ------------ | ------------------------ | -------------------------------------- |
+| `NODE_NAME`  | `node`                   | Human-readable name (id is auto-assigned) |
+| `SERVER_ADDR`| `ws://127.0.0.1:8082`   | Kanade server node endpoint            |
+| `MPD_HOST`   | `127.0.0.1`              | Local MPD host                         |
+| `MPD_PORT`   | `6600`                   | Local MPD port                         |
+| `RUST_LOG`   | `kanade_node=info`       | Log filter                             |
+
+## Protocols
+
+| Protocol              | Port  | Direction              | Format         |
+| --------------------- | ----- | ---------------------- | -------------- |
+| Kanade Node Protocol  | 8082  | Server ↔ Output Nodes  | WebSocket JSON |
+| WebSocket Client API  | 8080  | Server ↔ Clients       | WebSocket JSON |
+| OpenHome / UPnP       | 8090  | Control Points → Server| SOAP/XML       |
+| HTTP Media            | 8081  | Clients → Server       | HTTP           |
+
+See [protocols.md](protocols.md) for detailed protocol specifications.
 
 ## Workspace
 
-| Crate                     | Role                                          |
-| ------------------------- | --------------------------------------------- |
-| `kanade`                  | Headless server binary; wires all adapters    |
-| `kanade-tui`              | TUI binary; server + terminal UI              |
-| `kanade-core`             | Domain models, state, port traits, controller |
-| `kanade-db`               | SQLite persistence, FTS5 search               |
-| `kanade-scanner`          | Library scanner (lofty + dsf-meta)           |
-| `kanade-adapter-mpd`      | MPD output + state sync (AudioRenderer)       |
-| `kanade-adapter-ws`       | WebSocket input + broadcast adapter           |
-| `kanade-adapter-openhome` | OpenHome/UPnP input adapter                   |
+| Crate                      | Role                                              |
+| -------------------------- | ------------------------------------------------- |
+| `kanade`                   | Headless server binary; wires all adapters        |
+| `kanade-core`              | Domain models, state, port traits, controller    |
+| `kanade-db`                | SQLite persistence, FTS5 full-text search         |
+| `kanade-scanner`           | Library scanner (lofty + dsf-meta)                |
+| `kanade-node-protocol`     | Shared Kanade Protocol message types              |
+| `kanade-adapter-mpd`       | MPD audio backend (used by `kanade-node`)         |
+| `kanade-adapter-node-server`| Server-side node connection handler              |
+| `kanade-adapter-ws`        | WebSocket client API + state broadcast            |
+| `kanade-adapter-openhome`  | OpenHome/UPnP SOAP adapter                       |
+| `kanade-server-http`       | HTTP media file serving                           |
+| `kanade-node`              | Output node binary (connects to server, drives MPD) |
+| `kanade-tui`               | Terminal UI client (ratatui)                      |
+| `kanade-web`               | Web client (Svelte)                               |
 
 ## License
 

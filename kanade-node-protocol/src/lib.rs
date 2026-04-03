@@ -50,16 +50,30 @@ pub enum NodeCommand {
     Play,
     Pause,
     Stop,
-    Seek { position_secs: f64 },
-    SetVolume { volume: u8 },
+    Seek {
+        position_secs: f64,
+    },
+    SetVolume {
+        volume: u8,
+    },
     /// Replace the node's entire playback queue with the given file paths.
-    SetQueue { file_paths: Vec<String> },
+    SetQueue {
+        file_paths: Vec<String>,
+        projection_generation: u64,
+    },
     /// Append tracks to the node's playback queue.
-    Add { file_paths: Vec<String> },
+    Add {
+        file_paths: Vec<String>,
+    },
     /// Remove the track at the given queue position.
-    Remove { index: usize },
+    Remove {
+        index: usize,
+    },
     /// Move a track within the queue.
-    MoveTrack { from: usize, to: usize },
+    MoveTrack {
+        from: usize,
+        to: usize,
+    },
 }
 
 /// Periodic state update sent from the output node to the server so that the
@@ -70,5 +84,6 @@ pub struct NodeStateUpdate {
     pub status: PlaybackStatus,
     pub position_secs: f64,
     pub volume: u8,
-    pub current_index: Option<usize>,
+    pub mpd_song_index: Option<usize>,
+    pub projection_generation: u64,
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ws, ActiveTab, zoneId } from '../lib/stores';
+  import { ws, ActiveTab, nodeId } from '../lib/stores';
   import TransportBar from './TransportBar.svelte';
   import NowPlaying from './NowPlaying.svelte';
   import Library from './Library.svelte';
@@ -19,12 +19,12 @@
 
       if (e.key === ' ') {
         e.preventDefault();
-        const zone = ws.zones.find(z => z.id === zoneId);
-        if (zone) {
-          if (zone.status === 'playing') {
-            ws.sendCommand({ cmd: 'pause', zone_id: zoneId });
+        const node = ws.nodes.find(z => z.id === nodeId);
+        if (node) {
+          if (node.status === 'playing') {
+            ws.sendCommand({ cmd: 'pause', node_id: nodeId });
           } else {
-            ws.sendCommand({ cmd: 'play', zone_id: zoneId });
+            ws.sendCommand({ cmd: 'play', node_id: nodeId });
           }
         }
       } else if (e.key === '/') {

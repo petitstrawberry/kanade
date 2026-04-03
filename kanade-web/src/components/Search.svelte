@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ws, zoneId } from '../lib/stores';
+  import { ws, nodeId } from '../lib/stores';
   import type { Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
 
@@ -33,13 +33,13 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', zone_id: zoneId, track });
+    ws.sendCommand({ cmd: 'add_to_queue', node_id: nodeId, track });
   }
 
   function playNow(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', zone_id: zoneId, track });
-    const queueLen = ws.zones.find(z => z.id === zoneId)?.queue.length ?? 0;
-    ws.sendCommand({ cmd: 'play_index', zone_id: zoneId, index: queueLen }); // approximate index
+    ws.sendCommand({ cmd: 'add_to_queue', node_id: nodeId, track });
+    const queueLen = ws.nodes.find(z => z.id === nodeId)?.queue.length ?? 0;
+    ws.sendCommand({ cmd: 'play_index', node_id: nodeId, index: queueLen }); // approximate index
   }
 </script>
 

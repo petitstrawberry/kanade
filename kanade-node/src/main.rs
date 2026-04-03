@@ -46,6 +46,7 @@ use tracing::{error, info, warn};
 /// connection.
 struct NodeEventBroadcaster {
     tx: mpsc::Sender<String>,
+    projection_generation: Arc<AtomicU64>,
 }
 
 #[async_trait]
@@ -57,7 +58,8 @@ impl EventBroadcaster for NodeEventBroadcaster {
                 status: node.status,
                 position_secs: node.position_secs,
                 volume: node.volume,
-                current_index: node.current_index,
+                mpd_song_index: node.current_index,
+                projection_generation: self.projection_generation.load(Ordering::Relaxed),
             };
             if let Ok(json) = serde_json::to_string(&update) {
                 let _ = self.tx.send(json).await;
@@ -149,9 +151,12 @@ async fn main() -> Result<()> {
     // Channel through which the broadcaster sends serialised NodeStateUpdate JSON
     let (state_tx, mut state_rx) = mpsc::channel::<String>(64);
 
-    let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NodeEventBroadcaster { tx: state_tx });
+    let projection_generation = Arc::new(AtomicU64::new(0));
 
-    let queue_generation = Arc::new(AtomicU64::new(0));
+    let broadcaster: Arc<dyn EventBroadcaster> = Arc::new(NodeEventBroadcaster {
+        tx: state_tx,
+        projection_generation: Arc::clone(&projection_generation),
+    });
 
     let mut mpd_sync = MpdStateSync::new(
         mpd_host.clone(),
@@ -159,7 +164,7 @@ async fn main() -> Result<()> {
         MpdClient::new(mpd_host, mpd_port),
         Arc::clone(&local_state),
         vec![Arc::clone(&broadcaster)],
-        Arc::clone(&queue_generation),
+        Arc::clone(&projection_generation),
     );
 
     // Spawn MpdStateSync background task
@@ -176,7 +181,7 @@ async fn main() -> Result<()> {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<NodeCommand>(&text) {
                             Ok(cmd) => {
-                                execute_command(cmd, &renderer, &queue_generation).await;
+                                execute_command(cmd, &renderer, &projection_generation).await;
                             }
                             Err(e) => warn!("Unexpected message from server: {e}"),
                         }
@@ -209,7 +214,7 @@ async fn main() -> Result<()> {
 async fn execute_command(
     cmd: NodeCommand,
     renderer: &Arc<MpdRenderer>,
-    queue_generation: &Arc<AtomicU64>,
+    projection_generation: &Arc<AtomicU64>,
 ) {
     let result = match cmd {
         NodeCommand::Play => renderer.play().await,
@@ -217,9 +222,17 @@ async fn execute_command(
         NodeCommand::Stop => renderer.stop().await,
         NodeCommand::Seek { position_secs } => renderer.seek(position_secs).await,
         NodeCommand::SetVolume { volume } => renderer.set_volume(volume).await,
-        NodeCommand::SetQueue { file_paths } => {
-            queue_generation.fetch_add(1, Ordering::Relaxed);
-            renderer.set_queue(&file_paths).await
+        NodeCommand::SetQueue {
+            file_paths,
+            projection_generation: command_projection_generation,
+        } => {
+            let result = renderer
+                .set_queue(&file_paths, command_projection_generation)
+                .await;
+            if result.is_ok() {
+                projection_generation.store(command_projection_generation, Ordering::Relaxed);
+            }
+            result
         }
         NodeCommand::Add { file_paths } => renderer.add(&file_paths).await,
         NodeCommand::Remove { index } => renderer.remove(index).await,

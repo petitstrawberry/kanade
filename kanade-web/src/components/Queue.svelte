@@ -1,29 +1,29 @@
 <script lang="ts">
-  import { ws, zoneId } from '../lib/stores';
+  import { ws, nodeId } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
-  let zone = $derived(ws.zones.find(z => z.id === zoneId));
+  let zone = $derived(ws.nodes.find(z => z.id === nodeId));
   let queue = $derived(zone?.queue ?? []);
   let currentIndex = $derived(zone?.current_index ?? -1);
 
   function playIndex(index: number) {
-    ws.sendCommand({ cmd: 'play_index', zone_id: zoneId, index });
+    ws.sendCommand({ cmd: 'play_index', node_id: nodeId, index });
   }
 
   function removeTrack(index: number, e: MouseEvent) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'remove_from_queue', zone_id: zoneId, index });
+    ws.sendCommand({ cmd: 'remove_from_queue', node_id: nodeId, index });
   }
 
   function moveTrack(from: number, to: number, e: MouseEvent) {
     e.stopPropagation();
     if (to >= 0 && to < queue.length) {
-      ws.sendCommand({ cmd: 'move_in_queue', zone_id: zoneId, from, to });
+      ws.sendCommand({ cmd: 'move_in_queue', node_id: nodeId, from, to });
     }
   }
 
   function clearQueue() {
-    ws.sendCommand({ cmd: 'clear_queue', zone_id: zoneId });
+    ws.sendCommand({ cmd: 'clear_queue', node_id: nodeId });
   }
 </script>
 

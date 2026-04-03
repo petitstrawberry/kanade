@@ -176,7 +176,8 @@ async fn handle_node_connection(
                                     update.status,
                                     update.position_secs,
                                     update.volume,
-                                    update.current_index,
+                                    update.mpd_song_index,
+                                    update.projection_generation,
                                 )
                                 .await;
                             }

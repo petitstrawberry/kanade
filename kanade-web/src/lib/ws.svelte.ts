@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Zone } from './types';
+import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node } from './types';
 
 export class WsClient {
   private ws: WebSocket | null = null;
@@ -10,7 +10,7 @@ export class WsClient {
   private maxRetries = 10;
   private retryCount = 0;
 
-  zones = $state<Zone[]>([]);
+  nodes = $state<Node[]>([]);
   connected = $state(false);
 
   constructor(url: string) {
@@ -35,7 +35,7 @@ export class WsClient {
       try {
         const msg: ServerMessage = JSON.parse(event.data);
         if (msg.type === 'state') {
-          this.zones = msg.state.zones;
+          this.nodes = msg.state.nodes;
         } else if (msg.type === 'response') {
           const req = this.pendingRequests.get(msg.req_id);
           if (req) {

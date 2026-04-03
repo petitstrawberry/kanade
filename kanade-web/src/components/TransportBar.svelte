@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ws, zoneId } from '../lib/stores';
+  import { ws, nodeId } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
-  let zone = $derived(ws.zones.find(z => z.id === zoneId));
+  let zone = $derived(ws.nodes.find(z => z.id === nodeId));
   let currentTrack = $derived(zone?.queue[zone.current_index ?? -1]);
   let isPlaying = $derived(zone?.status === 'playing');
   let position = $derived(zone?.position_secs ?? 0);
@@ -12,18 +12,18 @@
   function togglePlay() {
     if (!zone) return;
     if (isPlaying) {
-      ws.sendCommand({ cmd: 'pause', zone_id: zoneId });
+      ws.sendCommand({ cmd: 'pause', node_id: nodeId });
     } else {
-      ws.sendCommand({ cmd: 'play', zone_id: zoneId });
+      ws.sendCommand({ cmd: 'play', node_id: nodeId });
     }
   }
 
   function playNext() {
-    ws.sendCommand({ cmd: 'next', zone_id: zoneId });
+    ws.sendCommand({ cmd: 'next', node_id: nodeId });
   }
 
   function playPrev() {
-    ws.sendCommand({ cmd: 'previous', zone_id: zoneId });
+    ws.sendCommand({ cmd: 'previous', node_id: nodeId });
   }
 
   function seek(e: MouseEvent) {
@@ -31,16 +31,16 @@
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const newPos = percent * duration;
-    ws.sendCommand({ cmd: 'seek', zone_id: zoneId, position_secs: newPos });
+    ws.sendCommand({ cmd: 'seek', node_id: nodeId, position_secs: newPos });
   }
 
   function setVolume(e: Event) {
     const input = e.target as HTMLInputElement;
-    ws.sendCommand({ cmd: 'set_volume', zone_id: zoneId, volume: parseInt(input.value) });
+    ws.sendCommand({ cmd: 'set_volume', node_id: nodeId, volume: parseInt(input.value) });
   }
 
   function toggleShuffle() {
-    if (zone) ws.sendCommand({ cmd: 'set_shuffle', zone_id: zoneId, shuffle: !zone.shuffle });
+    if (zone) ws.sendCommand({ cmd: 'set_shuffle', node_id: nodeId, shuffle: !zone.shuffle });
   }
 
   function toggleRepeat() {
@@ -50,7 +50,7 @@
       'all': 'one',
       'one': 'off'
     };
-    ws.sendCommand({ cmd: 'set_repeat', zone_id: zoneId, repeat: map[zone.repeat] });
+    ws.sendCommand({ cmd: 'set_repeat', node_id: nodeId, repeat: map[zone.repeat] });
   }
 </script>
 

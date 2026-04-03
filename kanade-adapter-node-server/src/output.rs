@@ -48,9 +48,14 @@ impl AudioOutput for RemoteNodeOutput {
         self.send(NodeCommand::SetVolume { volume }).await
     }
 
-    async fn set_queue(&self, file_paths: &[String]) -> Result<(), CoreError> {
+    async fn set_queue(
+        &self,
+        file_paths: &[String],
+        projection_generation: u64,
+    ) -> Result<(), CoreError> {
         self.send(NodeCommand::SetQueue {
             file_paths: file_paths.to_vec(),
+            projection_generation,
         })
         .await
     }

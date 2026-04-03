@@ -20,10 +20,7 @@ pub struct MpdStateSync {
     broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
     host: String,
     port: u16,
-    queue_generation: Arc<AtomicU64>,
-    last_generation: u64,
-    last_mpd_song: Option<usize>,
-    base_core_index: usize,
+    projection_generation: Arc<AtomicU64>,
 }
 
 impl MpdStateSync {
@@ -33,17 +30,14 @@ impl MpdStateSync {
         _client: MpdClient,
         state: std::sync::Arc<RwLock<PlaybackState>>,
         broadcasters: Vec<std::sync::Arc<dyn EventBroadcaster>>,
-        queue_generation: Arc<AtomicU64>,
+        projection_generation: Arc<AtomicU64>,
     ) -> Self {
         Self {
             state,
             broadcasters,
             host: host.into(),
             port,
-            last_generation: queue_generation.load(Ordering::Relaxed),
-            queue_generation,
-            last_mpd_song: None,
-            base_core_index: 0,
+            projection_generation,
         }
     }
 
@@ -133,28 +127,14 @@ impl MpdStateSync {
             Some("pause") => PlaybackStatus::Paused,
             _ => PlaybackStatus::Stopped,
         };
-
-        let current_gen = self.queue_generation.load(Ordering::Relaxed);
+        let projection_generation = self.projection_generation.load(Ordering::Relaxed);
 
         let mut state = self.state.write().await;
         if let Some(node) = state.nodes.get_mut(0) {
             node.position_secs = elapsed;
             node.status = playback_status;
             node.volume = volume;
-
-            if current_gen != self.last_generation {
-                self.last_generation = current_gen;
-                self.base_core_index = node.current_index.unwrap_or(0);
-                self.last_mpd_song = Some(0);
-            } else if let Some(song_idx) = song {
-                if self.last_mpd_song != Some(song_idx) {
-                    let new_core_index = self.base_core_index
-                        .saturating_add(song_idx);
-                    node.current_index = Some(new_core_index);
-                    node.position_secs = 0.0;
-                    self.last_mpd_song = Some(song_idx);
-                }
-            }
+            node.current_index = song;
         }
         let snapshot = state.clone();
         drop(state);
@@ -163,7 +143,9 @@ impl MpdStateSync {
             broadcaster.on_state_changed(&snapshot).await;
         }
 
-        debug!("MPD sync: elapsed={elapsed:.1}");
+        debug!(
+            "MPD sync: elapsed={elapsed:.1}, mpd_song={song:?}, projection_generation={projection_generation}"
+        );
         Ok(())
     }
 }

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -12,11 +11,18 @@ use crate::{
     state::PlaybackState,
 };
 
+#[derive(Debug, Clone, Default)]
+struct NodeTransportState {
+    projection_generation: u64,
+    projection_start_index: Option<usize>,
+    loaded_len: usize,
+}
+
 pub struct Core {
     state: Arc<RwLock<PlaybackState>>,
     outputs: Arc<RwLock<HashMap<String, Arc<dyn AudioOutput>>>>,
     broadcasters: Vec<Arc<dyn EventBroadcaster>>,
-    queue_generation: Arc<AtomicU64>,
+    transport_state: Arc<RwLock<HashMap<String, NodeTransportState>>>,
 }
 
 impl Core {
@@ -28,7 +34,7 @@ impl Core {
             state: Arc::new(RwLock::new(PlaybackState { nodes: Vec::new() })),
             outputs: Arc::new(RwLock::new(outputs.into_iter().collect())),
             broadcasters,
-            queue_generation: Arc::new(AtomicU64::new(0)),
+            transport_state: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -54,14 +60,39 @@ impl Core {
         status: PlaybackStatus,
         position_secs: f64,
         volume: u8,
-        current_index: Option<usize>,
+        mpd_song_index: Option<usize>,
+        projection_generation: u64,
     ) {
+        let projected_current_index = {
+            let transport = self.transport_state.read().await;
+            transport
+                .get(node_id)
+                .and_then(|projection| {
+                    if projection.projection_generation != projection_generation {
+                        return None;
+                    }
+
+                    let mpd_song_index = mpd_song_index?;
+                    if mpd_song_index >= projection.loaded_len {
+                        return None;
+                    }
+
+                    projection
+                        .projection_start_index
+                        .and_then(|start| start.checked_add(mpd_song_index))
+                })
+        };
+
         let mut s = self.state.write().await;
         if let Some(node) = s.node_mut(node_id) {
             node.status = status;
             node.position_secs = position_secs;
             node.volume = volume;
-            node.current_index = current_index;
+            if let Some(next_index) = projected_current_index {
+                if next_index < node.queue.len() {
+                    node.current_index = Some(next_index);
+                }
+            }
         }
         drop(s);
         self.broadcast().await;
@@ -71,16 +102,57 @@ impl Core {
         Arc::clone(&self.state)
     }
 
-    pub fn queue_generation(&self) -> Arc<AtomicU64> {
-        Arc::clone(&self.queue_generation)
+    async fn rebuild_projection_state(
+        &self,
+        node_id: &str,
+        projection_start_index: Option<usize>,
+        loaded_len: usize,
+    ) -> u64 {
+        let mut transport = self.transport_state.write().await;
+        let entry = transport.entry(node_id.to_string()).or_default();
+        entry.projection_generation = entry.projection_generation.wrapping_add(1);
+        entry.projection_start_index = projection_start_index;
+        entry.loaded_len = loaded_len;
+        entry.projection_generation
     }
 
-    fn bump_queue_generation(&self) {
-        self.queue_generation.fetch_add(1, Ordering::Relaxed);
+    async fn extend_projection_loaded_len(
+        &self,
+        node_id: &str,
+        projection_start_hint: Option<usize>,
+        added_len: usize,
+    ) {
+        if added_len == 0 {
+            return;
+        }
+        let mut transport = self.transport_state.write().await;
+        let entry = transport.entry(node_id.to_string()).or_default();
+        if entry.projection_start_index.is_none() {
+            entry.projection_start_index = projection_start_hint;
+        }
+        entry.loaded_len = entry.loaded_len.saturating_add(added_len);
+    }
+
+    async fn decrement_projection_loaded_len(&self, node_id: &str, removed_len: usize) {
+        if removed_len == 0 {
+            return;
+        }
+        let mut transport = self.transport_state.write().await;
+        if let Some(entry) = transport.get_mut(node_id) {
+            entry.loaded_len = entry.loaded_len.saturating_sub(removed_len);
+            if entry.loaded_len == 0 {
+                entry.projection_start_index = None;
+            }
+        }
     }
 
     pub async fn add_node(&self, node: Node) {
+        let node_id = node.id.clone();
         self.state.write().await.nodes.push(node);
+        self.transport_state
+            .write()
+            .await
+            .insert(node_id, NodeTransportState::default());
     }
 
     pub async fn remove_node(&self, node_id: &str) {
@@ -89,6 +161,7 @@ impl Core {
             .await
             .nodes
             .retain(|n| n.id != node_id);
+        self.transport_state.write().await.remove(node_id);
     }
 
     pub async fn get_node(&self, id: &str) -> Option<Node> {
@@ -169,9 +242,15 @@ impl Core {
         node.current_index = Some(next);
         node.position_secs = 0.0;
         let queue = Self::build_queue_file_paths(node);
+        let projection_start = node.current_index;
+        let loaded_len = queue.len();
         drop(s);
-        self.bump_queue_generation();
-        for o in self.each_output(node_id).await? { o.set_queue(&queue).await?; }
+        let projection_generation = self
+            .rebuild_projection_state(node_id, projection_start, loaded_len)
+            .await;
+        for o in self.each_output(node_id).await? {
+            o.set_queue(&queue, projection_generation).await?;
+        }
         for o in self.each_output(node_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
         if let Some(node) = s.node_mut(node_id) {
@@ -199,9 +278,15 @@ impl Core {
         node.current_index = Some(prev);
         node.position_secs = 0.0;
         let queue = Self::build_queue_file_paths(node);
+        let projection_start = node.current_index;
+        let loaded_len = queue.len();
         drop(s);
-        self.bump_queue_generation();
-        for o in self.each_output(node_id).await? { o.set_queue(&queue).await?; }
+        let projection_generation = self
+            .rebuild_projection_state(node_id, projection_start, loaded_len)
+            .await;
+        for o in self.each_output(node_id).await? {
+            o.set_queue(&queue, projection_generation).await?;
+        }
         for o in self.each_output(node_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
         if let Some(node) = s.node_mut(node_id) {
@@ -261,8 +346,11 @@ impl Core {
         for o in self.each_output(node_id).await? { o.add(&file_paths).await?; }
         let mut s = self.state.write().await;
         let node = s.node_mut(node_id).ok_or(CoreError::NodeNotFound)?;
+        let projection_start_hint = node.current_index;
         node.queue.push(track);
         drop(s);
+        self.extend_projection_loaded_len(node_id, projection_start_hint, file_paths.len())
+            .await;
         self.broadcast().await;
         Ok(())
     }
@@ -275,15 +363,20 @@ impl Core {
         for o in self.each_output(node_id).await? { o.add(&file_paths).await?; }
         let mut s = self.state.write().await;
         let node = s.node_mut(node_id).ok_or(CoreError::NodeNotFound)?;
+        let projection_start_hint = node.current_index;
         node.queue.extend(tracks);
         drop(s);
+        self.extend_projection_loaded_len(node_id, projection_start_hint, file_paths.len())
+            .await;
         self.broadcast().await;
         Ok(())
     }
 
     pub async fn clear_node_queue(&self, node_id: &str) -> Result<(), CoreError> {
-        self.bump_queue_generation();
-        for o in self.each_output(node_id).await? { o.set_queue(&[]).await?; }
+        let projection_generation = self.rebuild_projection_state(node_id, None, 0).await;
+        for o in self.each_output(node_id).await? {
+            o.set_queue(&[], projection_generation).await?;
+        }
         let mut s = self.state.write().await;
         let node = s.node_mut(node_id).ok_or(CoreError::NodeNotFound)?;
         node.queue.clear();
@@ -319,6 +412,7 @@ impl Core {
         }
         drop(s);
         for o in self.each_output(node_id).await? { o.remove(mpd_index).await?; }
+        self.decrement_projection_loaded_len(node_id, 1).await;
         self.broadcast().await;
         Ok(())
     }
@@ -365,9 +459,15 @@ impl Core {
         node.current_index = Some(index);
         node.position_secs = 0.0;
         let queue = Self::build_queue_file_paths(node);
+        let projection_start = node.current_index;
+        let loaded_len = queue.len();
         drop(s);
-        self.bump_queue_generation();
-        for o in self.each_output(node_id).await? { o.set_queue(&queue).await?; }
+        let projection_generation = self
+            .rebuild_projection_state(node_id, projection_start, loaded_len)
+            .await;
+        for o in self.each_output(node_id).await? {
+            o.set_queue(&queue, projection_generation).await?;
+        }
         for o in self.each_output(node_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
         if let Some(node) = s.node_mut(node_id) {
@@ -385,8 +485,13 @@ impl Core {
         start_index: Option<usize>,
     ) -> Result<(), CoreError> {
         let file_paths: Vec<String> = tracks.iter().map(|t| t.file_path.clone()).collect();
-        self.bump_queue_generation();
-        for o in self.each_output(node_id).await? { o.set_queue(&file_paths).await?; }
+        let projection_start = if file_paths.is_empty() { None } else { Some(0) };
+        let projection_generation = self
+            .rebuild_projection_state(node_id, projection_start, file_paths.len())
+            .await;
+        for o in self.each_output(node_id).await? {
+            o.set_queue(&file_paths, projection_generation).await?;
+        }
         let mut s = self.state.write().await;
         let node = s.node_mut(node_id).ok_or(CoreError::NodeNotFound)?;
         node.queue = tracks;
@@ -423,5 +528,220 @@ impl Core {
         for b in &self.broadcasters {
             b.on_state_changed(&snapshot).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    struct MockOutput {
+        last_set_queue: Mutex<Option<(Vec<String>, u64)>>,
+    }
+
+    impl MockOutput {
+        fn new() -> Self {
+            Self {
+                last_set_queue: Mutex::new(None),
+            }
+        }
+
+        fn last_projection_generation(&self) -> u64 {
+            self.last_set_queue
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|(_, generation)| *generation)
+                .unwrap_or(0)
+        }
+    }
+
+    #[async_trait]
+    impl AudioOutput for MockOutput {
+        async fn play(&self) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn pause(&self) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn seek(&self, _position_secs: f64) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn set_volume(&self, _volume: u8) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn set_queue(
+            &self,
+            file_paths: &[String],
+            projection_generation: u64,
+        ) -> Result<(), CoreError> {
+            *self.last_set_queue.lock().unwrap() =
+                Some((file_paths.to_vec(), projection_generation));
+            Ok(())
+        }
+
+        async fn add(&self, _file_paths: &[String]) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn remove(&self, _index: usize) -> Result<(), CoreError> {
+            Ok(())
+        }
+
+        async fn move_track(&self, _from: usize, _to: usize) -> Result<(), CoreError> {
+            Ok(())
+        }
+    }
+
+    fn sample_track(id: &str) -> Track {
+        Track {
+            id: id.to_string(),
+            file_path: format!("/music/{id}.flac"),
+            album_id: None,
+            title: Some(id.to_string()),
+            artist: None,
+            album_artist: None,
+            album_title: None,
+            composer: None,
+            genre: None,
+            track_number: None,
+            duration_secs: None,
+            format: None,
+            sample_rate: None,
+        }
+    }
+
+    async fn setup_core_with_node() -> (Core, Arc<MockOutput>) {
+        let output = Arc::new(MockOutput::new());
+        let core = Core::new(
+            vec![("default".to_string(), output.clone() as Arc<dyn AudioOutput>)],
+            vec![],
+        );
+        core.add_node(Node {
+            id: "default".to_string(),
+            name: "node".to_string(),
+            output_ids: vec!["default".to_string()],
+            queue: vec![],
+            current_index: None,
+            status: PlaybackStatus::Stopped,
+            position_secs: 0.0,
+            volume: 50,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+        })
+        .await;
+        (core, output)
+    }
+
+    #[tokio::test]
+    async fn sync_node_state_maps_projection_song_to_global_index() {
+        let (core, output) = setup_core_with_node().await;
+        core.set_node_queue(
+            "default",
+            vec![sample_track("a"), sample_track("b"), sample_track("c"), sample_track("d")],
+            Some(1),
+        )
+        .await
+        .unwrap();
+
+        let generation = output.last_projection_generation();
+
+        core.sync_node_state("default", PlaybackStatus::Playing, 12.0, 70, Some(2), generation)
+            .await;
+
+        let node = core.get_node("default").await.unwrap();
+        assert_eq!(node.current_index, Some(2));
+        assert_eq!(node.position_secs, 12.0);
+        assert_eq!(node.volume, 70);
+    }
+
+    #[tokio::test]
+    async fn sync_node_state_ignores_stale_projection_generation() {
+        let (core, output) = setup_core_with_node().await;
+        core.set_node_queue(
+            "default",
+            vec![sample_track("a"), sample_track("b"), sample_track("c")],
+            Some(1),
+        )
+        .await
+        .unwrap();
+
+        let generation = output.last_projection_generation();
+
+        core.sync_node_state(
+            "default",
+            PlaybackStatus::Playing,
+            5.0,
+            60,
+            Some(1),
+            generation.wrapping_sub(1),
+        )
+        .await;
+
+        let node = core.get_node("default").await.unwrap();
+        assert_eq!(node.current_index, Some(1));
+        assert_eq!(node.position_secs, 5.0);
+        assert_eq!(node.volume, 60);
+    }
+
+    #[tokio::test]
+    async fn add_to_queue_keeps_projection_base_and_allows_auto_advance() {
+        let (core, output) = setup_core_with_node().await;
+        core.set_node_queue(
+            "default",
+            vec![sample_track("a"), sample_track("b"), sample_track("c"), sample_track("d")],
+            None,
+        )
+        .await
+        .unwrap();
+        core.play_node_index(
+            "default",
+            1,
+        )
+        .await
+        .unwrap();
+
+        let generation = output.last_projection_generation();
+
+        core.add_to_node_queue("default", sample_track("e"))
+            .await
+            .unwrap();
+
+        core.sync_node_state("default", PlaybackStatus::Playing, 0.0, 50, Some(2), generation)
+            .await;
+
+        let node = core.get_node("default").await.unwrap();
+        assert_eq!(node.current_index, Some(3));
+    }
+
+    #[tokio::test]
+    async fn sync_node_state_ignores_out_of_bounds_mpd_song_index() {
+        let (core, output) = setup_core_with_node().await;
+        core.set_node_queue(
+            "default",
+            vec![sample_track("a"), sample_track("b"), sample_track("c")],
+            Some(1),
+        )
+        .await
+        .unwrap();
+
+        let generation = output.last_projection_generation();
+
+        core.sync_node_state("default", PlaybackStatus::Playing, 8.0, 40, Some(5), generation)
+            .await;
+
+        let node = core.get_node("default").await.unwrap();
+        assert_eq!(node.current_index, Some(1));
+        assert_eq!(node.position_secs, 8.0);
     }
 }

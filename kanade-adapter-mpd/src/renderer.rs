@@ -80,7 +80,11 @@ impl AudioOutput for MpdRenderer {
     ///
     /// Uses a `command_list` to atomically clear and re-populate the queue.
     #[instrument(skip(self, file_paths))]
-    async fn set_queue(&self, file_paths: &[String]) -> Result<(), CoreError> {
+    async fn set_queue(
+        &self,
+        file_paths: &[String],
+        _projection_generation: u64,
+    ) -> Result<(), CoreError> {
         let mut cmd = String::from("command_list_begin\nclear\n");
         for path in file_paths {
             let uri = self.media_uri(path);

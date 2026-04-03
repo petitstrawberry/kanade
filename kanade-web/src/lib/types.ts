@@ -25,7 +25,7 @@ export interface Album {
 export type RepeatMode = "off" | "one" | "all";
 export type PlaybackStatus = "stopped" | "playing" | "paused" | "loading";
 
-export interface Zone {
+export interface Node {
   id: string;
   name: string;
   output_ids: string[];
@@ -40,21 +40,21 @@ export interface Zone {
 
 // WS Protocol
 export type WsCommand =
-  | { cmd: "play"; zone_id: string }
-  | { cmd: "pause"; zone_id: string }
-  | { cmd: "stop"; zone_id: string }
-  | { cmd: "next"; zone_id: string }
-  | { cmd: "previous"; zone_id: string }
-  | { cmd: "seek"; zone_id: string; position_secs: number }
-  | { cmd: "set_volume"; zone_id: string; volume: number }
-  | { cmd: "set_repeat"; zone_id: string; repeat: RepeatMode }
-  | { cmd: "set_shuffle"; zone_id: string; shuffle: boolean }
-  | { cmd: "add_to_queue"; zone_id: string; track: Track }
-  | { cmd: "add_tracks_to_queue"; zone_id: string; tracks: Track[] }
-  | { cmd: "play_index"; zone_id: string; index: number }
-  | { cmd: "remove_from_queue"; zone_id: string; index: number }
-  | { cmd: "move_in_queue"; zone_id: string; from: number; to: number }
-  | { cmd: "clear_queue"; zone_id: string };
+  | { cmd: "play"; node_id: string }
+  | { cmd: "pause"; node_id: string }
+  | { cmd: "stop"; node_id: string }
+  | { cmd: "next"; node_id: string }
+  | { cmd: "previous"; node_id: string }
+  | { cmd: "seek"; node_id: string; position_secs: number }
+  | { cmd: "set_volume"; node_id: string; volume: number }
+  | { cmd: "set_repeat"; node_id: string; repeat: RepeatMode }
+  | { cmd: "set_shuffle"; node_id: string; shuffle: boolean }
+  | { cmd: "add_to_queue"; node_id: string; track: Track }
+  | { cmd: "add_tracks_to_queue"; node_id: string; tracks: Track[] }
+  | { cmd: "play_index"; node_id: string; index: number }
+  | { cmd: "remove_from_queue"; node_id: string; index: number }
+  | { cmd: "move_in_queue"; node_id: string; from: number; to: number }
+  | { cmd: "clear_queue"; node_id: string };
 
 export type WsRequest =
   | { req: "get_albums" }
@@ -66,14 +66,14 @@ export type WsRequest =
   | { req: "get_genre_albums"; genre: string }
   | { req: "get_genre_tracks"; genre: string }
   | { req: "search"; query: string }
-  | { req: "get_queue"; zone_id: string };
+  | { req: "get_queue"; node_id: string };
 
 export type ClientMessage =
   | WsCommand
   | ({ req_id: number } & WsRequest);
 
 export type ServerMessage =
-  | { type: "state"; state: { zones: Zone[] } }
+  | { type: "state"; state: { nodes: Node[] } }
   | { type: "response"; req_id: number; data: WsResponse };
 
 export type WsResponse =
