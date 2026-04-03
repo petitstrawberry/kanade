@@ -30,37 +30,23 @@ single shared state.
 ## Architecture
 
 ```
- ┌─────────────┐  ┌─────────────┐  ┌──────────────┐          ┌─────────────┐  ┌─────────────┐
- │ kanade-web  │  │ kanade-tui  │  │ OpenHome     │          │ kanade-node │  │ kanade-node │
- │ (WS :8080)  │  │ (WS :8080)  │  │ (SOAP :8090) │          │ (output)    │  │ (output)    │
- └──────┬──────┘  └──────┬──────┘  └──────┬───────┘          │ MPD adapter │  │ MPD adapter │
-        │                │                │                   │     MPD     │  │     MPD     │
-        │                │                │                   └──────┬──────┘  └──────┬──────┘
-        │                │                │                          │                │
-        └────────────────┴────────────────┴──────────┐    ┌─────────┴────────────────┘
-                                                    │    │
-                                              ┌─────▼────▼─────┐
-                                              │ Kanade Server  │
-                                              │               │
-                                              │ ┌───────────┐ │
-                                              │ │ kanade-core│ │
-                                              │ │ State      │ │
-                                              │ │ Queue      │ │
-                                              │ │ Controller │ │
-                                              │ └───────────┘ │
-                                              │ ┌───────────┐ │
-                                              │ │ kanade-db  │ │
-                                              │ │ SQLite+FTS5│ │
-                                              │ └───────────┘ │
-                                              │ ┌───────────┐ │
-                                              │ │ scanner   │ │
-                                              │ └───────────┘ │
-                                              └───────────────┘
+  Clients                             Kanade Server                           Output Nodes
+  ┌──────────┐                       ┌──────────────────┐                 ┌──────────────┐
+  │ kanade-  │  WS :8080, 8081       │                  │   WS :8082      │ living-room  │
+  │ web      │─────────────────────▶ │  kanade-core     │────────────────▶│  (MPD)       │
+  └──────────┘                       │  State · Queue   │                 └──────────────┘
+                                     │  Controller      │                 ┌──────────────┐
+                                     │                  │   WS :8082      │  study       │
+                                     │  kanade-db       │────────────────▶│  (MPD)       │
+                                     │  SQLite + FTS5   │                 └──────────────┘
+  ┌──────────┐  WS :8080             │                  │   WS :8082      ┌──────────────┐
+  │ kanade-  │─────────────────────▶ │  kanade-scanner  │────────────────▶│  kitchen     │
+  │ tui      │                       └──────────────────┘                 │  (MPD)       │
+  └──────────┘                                                            └──────────────┘
 
   WS :8080   Client Subprotocol   (server ↔ web, tui)
   WS :8082   Node Subprotocol      (server ↔ output nodes)
   HTTP :8081 Media Surface         (track streaming + artwork)
-  HTTP :8090 OpenHome / UPnP       (external control points)
 ```
 
 See [DESIGN.md](DESIGN.md) for detailed design decisions and data flow.
