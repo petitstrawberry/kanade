@@ -159,7 +159,7 @@
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
             </button>
             <button class="icon" onclick={playPrev}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="5" width="4" height="14" rx="1"/><path d="M9 5l10 7-10 7V5z"/></svg>
+              <svg width="24" height="24" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"/><path d="M14 3l-10 6 10 6V3z"/></svg>
             </button>
             <button class="icon play" onclick={togglePlay}>
               {#if isPlaying}
