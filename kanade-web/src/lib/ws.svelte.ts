@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node } from './types';
+import { selectedNodeId } from './stores.svelte';
 
 export class WsClient {
   private ws: WebSocket | null = null;
@@ -14,6 +15,10 @@ export class WsClient {
   connected = $state(false);
 
   getNodeId(): string {
+    const id = selectedNodeId.value;
+    if (id && this.nodes.some(n => n.id === id)) {
+      return id;
+    }
     return this.nodes[0]?.id ?? '';
   }
 

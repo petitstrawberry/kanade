@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { ws, mediaBase } from '../lib/stores';
+  import { ws, mediaBase, selectNode } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
   let { onOpenNowPlaying }: { onOpenNowPlaying: () => void } = $props();
 
+  let showNodePicker = $state(false);
   let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
   let currentTrack = $derived(node?.queue[node.current_index ?? -1]);
   let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
@@ -122,12 +123,28 @@
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5.5v5h3l4 4v-13l-4 4H2z"/><path d="M11 4.5c.8.8 1.3 2 1.3 3.2s-.5 2.4-1.3 3.2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
         <input type="range" class="volume-slider" min="0" max="100" value={volume} onchange={setVolume} />
       </div>
-      {#if node}
-        <span class="node-name">Node: {node.name}</span>
+      {#if ws.nodes.length > 1}
+        <div class="node-picker" onclick={(e) => e.stopPropagation()}>
+          <button class="node-btn" onclick={() => showNodePicker = !showNodePicker}>
+            <span class="node-name">{node?.name ?? '—'}</span>
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3l3 4 3-4z"/></svg>
+          </button>
+          {#if showNodePicker}
+            {#each ws.nodes as n}
+              <button class="node-option" class:active={n.id === node?.id} onclick={() => { selectNode(n.id); showNodePicker = false; }}>
+                {n.name}
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {:else if node}
+        <span class="node-name">{node.name}</span>
       {/if}
     </div>
   </div>
 </div>
+
+<svelte:window onclick={() => showNodePicker = false} />
 
 <style>
   .transport-bar {
@@ -312,6 +329,49 @@
     color: var(--comment);
     white-space: nowrap;
   }
+
+  .node-picker {
+    position: relative;
+  }
+
+  .node-picker > button + * {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    background: var(--bg-dark);
+    border: 1px solid var(--bg-highlight);
+    border-radius: 6px;
+    padding: 4px;
+    min-width: 120px;
+    z-index: 50;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+  }
+
+  .node-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    color: var(--comment);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+  }
+  .node-btn:hover { color: var(--fg); background: var(--bg-highlight); }
+
+  .node-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font-size: 12px;
+    color: var(--fg-dark);
+    padding: 6px 12px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .node-option:hover { background: var(--bg-highlight); color: var(--fg); }
+  .node-option.active { color: var(--accent); }
 
   @media (max-width: 768px) {
     .center-col, .right-col { display: none; }

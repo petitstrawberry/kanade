@@ -268,8 +268,33 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
 
     let Some(track_id) = path.strip_prefix("/media/tracks/") else {
         let Some(album_id) = path.strip_prefix("/media/art/") else {
-            write_simple_response(&mut writer, 404, "Not Found", &[]).await?;
-            return Ok(());
+            let Some(raw_path) = path.strip_prefix("/media/file/") else {
+                write_simple_response(&mut writer, 404, "Not Found", &[]).await?;
+                return Ok(());
+            };
+
+            let decoded = percent_decode(raw_path);
+            if decoded.is_empty() || decoded.contains("..") {
+                write_simple_response(&mut writer, 400, "Bad Request", &[]).await?;
+                return Ok(());
+            }
+
+            let content_type = content_type_for_path(&decoded);
+            match File::open(&decoded).await {
+                Ok(mut file) => {
+                    if let Err(e) = serve_file_with_range(&mut writer, method, &mut file, content_type, range_header.as_deref()).await {
+                        let status = if e.contains("open file:") { 404 } else { 500 };
+                        let text = if status == 404 { "Not Found" } else { "Internal Server Error" };
+                        write_simple_response(&mut writer, status, text, &[]).await?;
+                        return Err(e);
+                    }
+                    return Ok(());
+                }
+                Err(_) => {
+                    write_simple_response(&mut writer, 404, "Not Found", &[]).await?;
+                    return Ok(());
+                }
+            }
         };
 
         let album_id = album_id.split('?').next().unwrap_or(album_id).to_string();
@@ -544,4 +569,23 @@ async fn write_response_headers(
 
 fn is_expected_disconnect(error: &str) -> bool {
     error.contains("Broken pipe") || error.contains("Connection reset")
+}
+
+fn percent_decode(input: &str) -> String {
+    let mut result = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &input[i + 1..i + 3];
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                result.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(result).unwrap_or_default()
 }
