@@ -272,12 +272,12 @@ impl Core {
             return Ok(());
         }
 
-        let (should_resume, resume_position_secs) = previous_node_id
+        let (resume_status, resume_position_secs) = previous_node_id
             .as_deref()
             .and_then(|id| s.node(id))
-            .map(|n| (n.status == PlaybackStatus::Playing, n.position_secs))
-            .unwrap_or((false, 0.0));
-        info!(target_node_id = %node_id, previous_node_id = ?previous_node_id, should_resume, "select_node: switching");
+            .map(|n| (n.status.clone(), n.position_secs))
+            .unwrap_or((PlaybackStatus::Stopped, 0.0));
+        info!(target_node_id = %node_id, previous_node_id = ?previous_node_id, resume_status = ?resume_status, "select_node: switching");
 
         s.selected_node_id = Some(node_id.to_string());
 
@@ -299,26 +299,40 @@ impl Core {
         info!(target_node_id = %node_id, "select_node: syncing target node to global queue");
         self.sync_output_to_global(node_id).await?;
 
-        if resume_position_secs > 0.0 {
-            for o in self.each_output(node_id).await? {
-                o.seek(resume_position_secs).await?;
+        match resume_status {
+            PlaybackStatus::Playing => {
+                info!(target_node_id = %node_id, "select_node: resuming target node playback");
+                for o in self.each_output(node_id).await? {
+                    o.play().await?;
+                    if resume_position_secs > 0.0 {
+                        o.seek(resume_position_secs).await?;
+                    }
+                }
+                let mut s = self.state.write().await;
+                if let Some(active) = s.node_mut(node_id) {
+                    active.status = PlaybackStatus::Playing;
+                    active.position_secs = resume_position_secs;
+                }
             }
-        }
-
-        if should_resume {
-            info!(target_node_id = %node_id, "select_node: resuming target node playback");
-            for o in self.each_output(node_id).await? {
-                o.play().await?;
+            PlaybackStatus::Paused => {
+                for o in self.each_output(node_id).await? {
+                    o.play().await?;
+                    if resume_position_secs > 0.0 {
+                        o.seek(resume_position_secs).await?;
+                    }
+                    o.pause().await?;
+                }
+                let mut s = self.state.write().await;
+                if let Some(active) = s.node_mut(node_id) {
+                    active.status = PlaybackStatus::Paused;
+                    active.position_secs = resume_position_secs;
+                }
             }
-            let mut s = self.state.write().await;
-            if let Some(active) = s.node_mut(node_id) {
-                active.status = PlaybackStatus::Playing;
-                active.position_secs = resume_position_secs;
-            }
-        } else {
-            let mut s = self.state.write().await;
-            if let Some(active) = s.node_mut(node_id) {
-                active.position_secs = resume_position_secs;
+            _ => {
+                let mut s = self.state.write().await;
+                if let Some(active) = s.node_mut(node_id) {
+                    active.position_secs = resume_position_secs;
+                }
             }
         }
 
