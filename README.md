@@ -36,10 +36,10 @@ single port (`:8080`).
   │ kanade-  │  WS :8080, HTTP: 8081 │                  │   WS :8080      │ living-room  │
   │ web      │─────────────────────▶ │  kanade-core     │────────────────▶│  (MPD)       │
   └──────────┘                       │  State · Queue   │                 └──────────────┘
-                                      │  Controller      │                 ┌──────────────┐
-                                      │                  │   WS :8080      │  study       │
-                                      │  kanade-db       │────────────────▶│  (MPD)       │
-                                      │  SQLite + FTS5   │                 └──────────────┘
+                                     │  Controller      │                 ┌──────────────┐
+                                     │   WS :8080       |                 │  study       │
+                                     │  kanade-db       │────────────────▶│  (MPD)       │
+                                     │  SQLite + FTS5   │                 └──────────────┘
   ┌──────────┐  WS :8080             │                  │   WS :8080      ┌──────────────┐
   │ kanade-  │─────────────────────▶ │  kanade-scanner  │────────────────▶│  kitchen     │
   │ tui      │                       └──────────────────┘                 │  (MPD)       │
