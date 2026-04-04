@@ -14,7 +14,12 @@ function getBrowserNode(): BrowserNode {
   if (!g.__kanadeBrowserNode) {
     const player = new AudioPlayer(() => {});
     const node = new BrowserNode(player);
-    const nodeWsUrl = wsUrl.replace(/:\d+$/, '') + ':8082';
+    const nodeWs = new URL(wsUrl);
+    nodeWs.port = '8082';
+    nodeWs.pathname = '/';
+    nodeWs.search = '';
+    nodeWs.hash = '';
+    const nodeWsUrl = nodeWs.toString();
     const nodeName = `Browser (${navigator.userAgent.includes('iPhone') ? 'iPhone' : navigator.userAgent.includes('iPad') ? 'iPad' : 'Desktop'})`;
     node.connect(nodeWsUrl, nodeName);
     g.__kanadeBrowserNode = node;
@@ -23,13 +28,6 @@ function getBrowserNode(): BrowserNode {
 }
 
 export const browserNode = getBrowserNode();
-
-export const selectedNodeId = $state({ value: localStorage.getItem('kanade-node-id') || '' });
-
-export function selectNode(id: string) {
-  selectedNodeId.value = id;
-  localStorage.setItem('kanade-node-id', id);
-}
 
 export class ActiveTab {
   value = $state<'library' | 'queue' | 'search'>('library');

@@ -29,34 +29,40 @@ export type PlaybackStatus = "stopped" | "playing" | "paused" | "loading";
 export interface Node {
   id: string;
   name: string;
-  output_ids: string[];
-  queue: Track[];
-  current_index: number | null;
+  connected: boolean;
   status: PlaybackStatus;
   position_secs: number;
   volume: number;
+}
+
+export interface PlaybackState {
+  nodes: Node[];
+  selected_node_id: string | null;
+  queue: Track[];
+  current_index: number | null;
   shuffle: boolean;
   repeat: RepeatMode;
 }
 
 // WS Protocol
 export type WsCommand =
-  | { cmd: "play"; node_id: string }
-  | { cmd: "pause"; node_id: string }
-  | { cmd: "stop"; node_id: string }
-  | { cmd: "next"; node_id: string }
-  | { cmd: "previous"; node_id: string }
-  | { cmd: "seek"; node_id: string; position_secs: number }
-  | { cmd: "set_volume"; node_id: string; volume: number }
-  | { cmd: "set_repeat"; node_id: string; repeat: RepeatMode }
-  | { cmd: "set_shuffle"; node_id: string; shuffle: boolean }
-  | { cmd: "add_to_queue"; node_id: string; track: Track }
-  | { cmd: "add_tracks_to_queue"; node_id: string; tracks: Track[] }
-  | { cmd: "play_index"; node_id: string; index: number }
-  | { cmd: "remove_from_queue"; node_id: string; index: number }
-  | { cmd: "move_in_queue"; node_id: string; from: number; to: number }
-  | { cmd: "clear_queue"; node_id: string }
-  | { cmd: "replace_and_play"; node_id: string; tracks: Track[]; index: number };
+  | { cmd: "play" }
+  | { cmd: "pause" }
+  | { cmd: "stop" }
+  | { cmd: "next" }
+  | { cmd: "previous" }
+  | { cmd: "seek"; position_secs: number }
+  | { cmd: "set_volume"; volume: number }
+  | { cmd: "set_repeat"; repeat: RepeatMode }
+  | { cmd: "set_shuffle"; shuffle: boolean }
+  | { cmd: "add_to_queue"; track: Track }
+  | { cmd: "add_tracks_to_queue"; tracks: Track[] }
+  | { cmd: "play_index"; index: number }
+  | { cmd: "remove_from_queue"; index: number }
+  | { cmd: "move_in_queue"; from: number; to: number }
+  | { cmd: "clear_queue" }
+  | { cmd: "replace_and_play"; tracks: Track[]; index: number }
+  | { cmd: "select_node"; node_id: string };
 
 export type WsRequest =
   | { req: "get_albums" }
@@ -68,14 +74,14 @@ export type WsRequest =
   | { req: "get_genre_albums"; genre: string }
   | { req: "get_genre_tracks"; genre: string }
   | { req: "search"; query: string }
-  | { req: "get_queue"; node_id: string };
+  | { req: "get_queue" };
 
 export type ClientMessage =
   | WsCommand
   | ({ req_id: number } & WsRequest);
 
 export type ServerMessage =
-  | { type: "state"; state: { nodes: Node[] } }
+  | { type: "state"; state: PlaybackState }
   | { type: "response"; req_id: number; data: WsResponse };
 
 export type WsResponse =

@@ -21,14 +21,14 @@
 
       if (e.key === ' ') {
         e.preventDefault();
-        const nid = ws.getNodeId();
+        const nid = ws.selectedNodeId;
         if (nid) {
           const node = ws.nodes.find(z => z.id === nid);
           if (node) {
             if (node.status === 'playing') {
-              ws.sendCommand({ cmd: 'pause', node_id: nid });
+              ws.sendCommand({ cmd: 'pause' });
             } else {
-              ws.sendCommand({ cmd: 'play', node_id: nid });
+              ws.sendCommand({ cmd: 'play' });
             }
           }
         }

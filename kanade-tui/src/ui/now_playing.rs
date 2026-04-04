@@ -12,7 +12,10 @@ use kanade_core::{
 };
 
 pub fn draw(f: &mut Frame, area: Rect, state: &PlaybackState) {
-    let node = state.nodes.first();
+    let node = state
+        .selected_node_id
+        .as_deref()
+        .and_then(|node_id| state.node(node_id));
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -24,18 +27,18 @@ pub fn draw(f: &mut Frame, area: Rect, state: &PlaybackState) {
         ])
         .split(area);
 
-    render_track_info(f, chunks[0], node);
-    render_progress(f, chunks[1], node);
-    render_status(f, chunks[2], node);
-    render_details(f, chunks[3], node);
+    render_track_info(f, chunks[0], state);
+    render_progress(f, chunks[1], node, state);
+    render_status(f, chunks[2], node, state);
+    render_details(f, chunks[3], node, state);
 }
 
 fn dim(s: impl Into<String>) -> Span<'static> {
     Span::styled(s.into(), Style::default().fg(Color::DarkGray))
 }
 
-fn render_track_info(f: &mut Frame, area: Rect, node: Option<&Node>) {
-    let current = node.and_then(|n| n.current_track());
+fn render_track_info(f: &mut Frame, area: Rect, state: &PlaybackState) {
+    let current = state.current_track();
 
     let lines: Vec<Line<'static>> = current
         .map(|t| {
@@ -88,10 +91,10 @@ fn render_track_info(f: &mut Frame, area: Rect, node: Option<&Node>) {
     f.render_widget(content, area);
 }
 
-fn render_progress(f: &mut Frame, area: Rect, node: Option<&Node>) {
+fn render_progress(f: &mut Frame, area: Rect, node: Option<&Node>, state: &PlaybackState) {
     let (duration, position) = node
         .and_then(|n| {
-            let d = n.current_track()?.duration_secs?;
+            let d = state.current_track()?.duration_secs?;
             Some((d, n.position_secs))
         })
         .unwrap_or((0.0, 0.0));
@@ -116,7 +119,7 @@ fn render_progress(f: &mut Frame, area: Rect, node: Option<&Node>) {
     f.render_widget(gauge, area);
 }
 
-fn render_status(f: &mut Frame, area: Rect, node: Option<&Node>) {
+fn render_status(f: &mut Frame, area: Rect, node: Option<&Node>, state: &PlaybackState) {
     let (status_str, volume, repeat_str, shuffle_str) = node
         .map(|n| {
             let s = match n.status {
@@ -125,12 +128,12 @@ fn render_status(f: &mut Frame, area: Rect, node: Option<&Node>) {
                 PlaybackStatus::Stopped => "[] Stopped",
                 PlaybackStatus::Loading => "~ Loading",
             };
-            let r = match n.repeat {
+            let r = match state.repeat {
                 RepeatMode::Off => "",
                 RepeatMode::One => " [Repeat One]",
                 RepeatMode::All => " [Repeat All]",
             };
-            let sh = if n.shuffle { " [Shuffle]" } else { "" };
+            let sh = if state.shuffle { " [Shuffle]" } else { "" };
             (s, n.volume, r, sh)
         })
         .unwrap_or(("[] Stopped", 0, "", ""));
@@ -147,8 +150,8 @@ fn render_status(f: &mut Frame, area: Rect, node: Option<&Node>) {
     f.render_widget(content, area);
 }
 
-fn render_details(f: &mut Frame, area: Rect, node: Option<&Node>) {
-    let current = node.and_then(|n| n.current_track());
+fn render_details(f: &mut Frame, area: Rect, node: Option<&Node>, state: &PlaybackState) {
+    let current = state.current_track();
 
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -165,11 +168,14 @@ fn render_details(f: &mut Frame, area: Rect, node: Option<&Node>) {
 
     // Node info
     if let Some(n) = node {
-        spans.push(dim(format!("  |  Node: {}", n.name)));
+        spans.push(Span::styled(
+            format!("  |  Node: {}", n.name),
+            Style::default().fg(Color::DarkGray),
+        ));
         spans.push(dim(format!(
             "  |  Queue: {}/{}",
-            n.current_index.map(|i| i + 1).unwrap_or(0),
-            n.queue.len()
+            state.current_index.map(|i| i + 1).unwrap_or(0),
+            state.queue.len()
         )));
     }
 

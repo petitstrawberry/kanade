@@ -1,38 +1,23 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
 use futures_util::{SinkExt, StreamExt};
 use kanade_core::{
     controller::Core,
-    model::{Node, PlaybackStatus, RepeatMode},
-    ports::AudioOutput,
+    model::{Node, PlaybackStatus},
 };
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use crate::output::RemoteNodeOutput;
 
-/// Listens for WebSocket connections from output nodes and wires each
-/// connected node into the [`Core`] as a live [`AudioOutput`].
-///
-/// Bind address is controlled by the `NODE_ADDR` environment variable
-/// (default `0.0.0.0:8082`).
 pub struct NodeServer {
     core: Arc<Core>,
     addr: SocketAddr,
     media_base_url: String,
-    restored_states: Arc<RwLock<HashMap<String, RestoredNodeState>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RestoredNodeState {
-    pub queue: Vec<kanade_core::model::Track>,
-    pub current_index: Option<usize>,
-    pub volume: u8,
-    pub shuffle: bool,
-    pub repeat: RepeatMode,
 }
 
 impl NodeServer {
@@ -40,13 +25,11 @@ impl NodeServer {
         core: Arc<Core>,
         addr: SocketAddr,
         media_base_url: impl Into<String>,
-        restored_states: Arc<RwLock<HashMap<String, RestoredNodeState>>>,
     ) -> Self {
         Self {
             core,
             addr,
             media_base_url: media_base_url.into(),
-            restored_states,
         }
     }
 
@@ -58,20 +41,17 @@ impl NodeServer {
 
         let core = self.core;
         let media_base_url = self.media_base_url;
-        let restored_states = self.restored_states;
 
         loop {
             match listener.accept().await {
                 Ok((stream, peer)) => {
                     let core = Arc::clone(&core);
                     let media_base_url = media_base_url.clone();
-                    let restored_states = Arc::clone(&restored_states);
                     tokio::spawn(handle_node_connection(
                         stream,
                         peer,
                         core,
                         media_base_url,
-                        restored_states,
                     ));
                 }
                 Err(e) => {
@@ -87,7 +67,6 @@ async fn handle_node_connection(
     peer: SocketAddr,
     core: Arc<Core>,
     media_base_url: String,
-    restored_states: Arc<RwLock<HashMap<String, RestoredNodeState>>>,
 ) {
     let ws = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -100,7 +79,6 @@ async fn handle_node_connection(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    // ── Handshake: wait for NodeRegistration ─────────────────────────────────
     let registration: NodeRegistration = loop {
         match ws_rx.next().await {
             Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
@@ -118,64 +96,69 @@ async fn handle_node_connection(
         }
     };
 
-    let node_id = registration.name.clone();
+    let display_name = registration
+        .display_name
+        .clone()
+        .or(registration.name.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("node-{}", Uuid::new_v4()));
 
-    core.unregister_output(&node_id).await;
-    core.remove_node(&node_id).await;
-
-    let restored = restored_states.write().await.remove(&node_id);
+    let node_id = registration
+        .node_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| display_name.clone());
 
     info!("Output node registered: {node_id}");
+
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(64);
+    let output: Arc<dyn kanade_core::ports::AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
+
+    core.register_output(node_id.clone(), Arc::clone(&output)).await;
+
+    core.add_node(Node {
+        id: node_id.clone(),
+        name: display_name,
+        connected: true,
+        status: PlaybackStatus::Stopped,
+        position_secs: 0.0,
+        volume: 50,
+    })
+    .await;
+
+    if let Err(e) = core.sync_output_to_global(&node_id).await {
+        warn!("Node {peer}: failed to sync output state: {e}");
+    }
 
     let ack = NodeRegistrationAck {
         node_id: node_id.clone(),
         media_base_url,
     };
     if ws_tx.send(Message::Text(serde_json::to_string(&ack).expect("ack serializable"))).await.is_err() {
+        core.unregister_output(&node_id).await;
+        core.mark_node_connected(&node_id, false).await;
         return;
     }
 
-    let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(64);
-    let output: Arc<dyn AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
-
-    core.register_output(node_id.clone(), Arc::clone(&output)).await;
-
-    let (queue, current_index, volume, shuffle, repeat) = if let Some(restored) = restored {
-        (
-            restored.queue,
-            restored.current_index,
-            restored.volume,
-            restored.shuffle,
-            restored.repeat,
-        )
-    } else {
-        (Vec::new(), None, 50, false, RepeatMode::Off)
+    let selected_node_id = {
+        let state = core.state_handle();
+        let selected = state.read().await.selected_node_id.clone();
+        selected
     };
-
-    core.add_node(Node {
-        id: node_id.clone(),
-        name: registration.name.clone(),
-        output_ids: vec![node_id.clone()],
-        queue,
-        current_index,
-        status: PlaybackStatus::Stopped,
-        position_secs: 0.0,
-        volume,
-        shuffle,
-        repeat,
-    })
-    .await;
-
-    if let Err(e) = core.restore_node_output_state(&node_id).await {
-        warn!("Node {peer}: failed to restore output state: {e}");
+    if let Some(selected_node) = selected_node_id {
+        if selected_node != node_id {
+            if let Err(e) = core.stop_node(&node_id).await {
+                warn!("Node {peer}: failed to stop non-active output: {e}");
+            }
+        }
     }
 
-    // ── Main loop: relay commands → node, state updates ← node ───────────────
     loop {
         tokio::select! {
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(cmd) => {
+                        info!(node_id = %node_id, command = ?cmd, "node-server: forwarding command to node");
                         let json = match serde_json::to_string(&cmd) {
                             Ok(j) => j,
                             Err(e) => {
@@ -195,6 +178,10 @@ async fn handle_node_connection(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<NodeStateUpdate>(&text) {
                             Ok(update) => {
+                                if !core.is_same_output(&node_id, &output).await {
+                                    warn!("Node {peer}: ignoring stale state update for {node_id}");
+                                    continue;
+                                }
                                 core.sync_node_state(
                                     &node_id,
                                     update.status,
@@ -219,8 +206,9 @@ async fn handle_node_connection(
         }
     }
 
-    // ── Cleanup ───────────────────────────────────────────────────────────────
     info!("Output node disconnected: {}", node_id);
-    core.unregister_output(&node_id).await;
-    core.remove_node(&node_id).await;
+    if core.is_same_output(&node_id, &output).await {
+        core.unregister_output(&node_id).await;
+        core.mark_node_connected(&node_id, false).await;
+    }
 }

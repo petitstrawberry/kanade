@@ -12,7 +12,7 @@ use rusqlite::{Connection, Result};
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
 /// Schema version. Increment when adding columns or tables.
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -155,6 +155,13 @@ static MIGRATIONS: &[(&str, &str)] = &[
                 repeat        TEXT NOT NULL DEFAULT 'off',
                 updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
             );
+        "#,
+    ),
+    (
+        "7",
+        r#"
+            ALTER TABLE playback_state ADD COLUMN active_output_id TEXT;
+            UPDATE playback_state SET active_output_id = NULL WHERE active_output_id IS NULL;
         "#,
     ),
 ];

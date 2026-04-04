@@ -134,8 +134,8 @@ impl MpdStateSync {
             node.position_secs = elapsed;
             node.status = playback_status;
             node.volume = volume;
-            node.current_index = song;
         }
+        state.current_index = song;
         let snapshot = state.clone();
         drop(state);
 

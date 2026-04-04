@@ -1,5 +1,4 @@
-import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node } from './types';
-import { selectedNodeId } from './stores.svelte';
+import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node, Track, RepeatMode } from './types';
 
 export class WsClient {
   private ws: WebSocket | null = null;
@@ -12,14 +11,15 @@ export class WsClient {
   private retryCount = 0;
 
   nodes = $state<Node[]>([]);
+  selectedNodeId = $state<string | null>(null);
+  queue = $state<Track[]>([]);
+  currentIndex = $state<number | null>(null);
+  shuffle = $state(false);
+  repeat = $state<RepeatMode>('off');
   connected = $state(false);
 
-  getNodeId(): string {
-    const id = selectedNodeId.value;
-    if (id && this.nodes.some(n => n.id === id)) {
-      return id;
-    }
-    return this.nodes[0]?.id ?? '';
+  getNodeId(): string | null {
+    return this.selectedNodeId;
   }
 
   constructor(url: string) {
@@ -45,6 +45,11 @@ export class WsClient {
         const msg: ServerMessage = JSON.parse(event.data);
         if (msg.type === 'state') {
           this.nodes = msg.state.nodes;
+          this.selectedNodeId = msg.state.selected_node_id;
+          this.queue = msg.state.queue;
+          this.currentIndex = msg.state.current_index;
+          this.shuffle = msg.state.shuffle;
+          this.repeat = msg.state.repeat;
         } else if (msg.type === 'response') {
           const req = this.pendingRequests.get(msg.req_id);
           if (req) {
@@ -95,6 +100,7 @@ export class WsClient {
 
   sendCommand(cmd: WsCommand) {
     const msg: ClientMessage = cmd;
+    console.log('ws.sendCommand', msg, { connected: this.connected });
     this.sendRaw(JSON.stringify(msg));
   }
 

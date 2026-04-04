@@ -80,7 +80,7 @@ impl EventBroadcaster for NodeEventBroadcaster {
                 status: node.status,
                 position_secs: node.position_secs,
                 volume: node.volume,
-                mpd_song_index: node.current_index,
+                mpd_song_index: state.current_index,
                 projection_generation: self.projection_generation.load(Ordering::Relaxed),
             };
             if let Ok(json) = serde_json::to_string(&update) {
@@ -118,15 +118,16 @@ async fn main() -> Result<()> {
         nodes: vec![Node {
             id: String::new(),
             name: node_name.clone(),
-            output_ids: Vec::new(),
-            queue: Vec::new(),
-            current_index: None,
+            connected: true,
             status: PlaybackStatus::Stopped,
             position_secs: 0.0,
             volume: 50,
-            shuffle: false,
-            repeat: kanade_core::model::RepeatMode::Off,
         }],
+        selected_node_id: None,
+        queue: Vec::new(),
+        current_index: None,
+        shuffle: false,
+        repeat: kanade_core::model::RepeatMode::Off,
     }));
 
     let projection_generation = Arc::new(AtomicU64::new(0));
@@ -224,7 +225,9 @@ async fn run_session(
 
     // ── Handshake ─────────────────────────────────────────────────────────
     let registration = NodeRegistration {
-        name: node_name.to_string(),
+        node_id: Some(node_name.to_string()),
+        display_name: Some(node_name.to_string()),
+        name: None,
     };
     ws_tx
         .send(Message::Text(serde_json::to_string(&registration)?))
@@ -253,7 +256,7 @@ async fn run_session(
         let mut state = local_state.write().await;
         if let Some(node) = state.nodes.first_mut() {
             node.id = node_id.clone();
-            node.output_ids = vec![node_id.clone()];
+            node.connected = true;
         }
     }
 
@@ -309,6 +312,7 @@ async fn execute_command(
     renderer: &Arc<MpdRenderer>,
     projection_generation: &Arc<AtomicU64>,
 ) {
+    info!(command = ?cmd, "kanade-node: executing command");
     let result = match cmd {
         NodeCommand::Play => renderer.play().await,
         NodeCommand::Pause => renderer.pause().await,

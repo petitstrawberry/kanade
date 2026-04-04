@@ -2,28 +2,27 @@
   import { ws } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
-  let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
-  let queue = $derived(node?.queue ?? []);
-  let currentIndex = $derived(node?.current_index ?? -1);
+  let queue = $derived(ws.queue);
+  let currentIndex = $derived(ws.currentIndex ?? -1);
 
   function playIndex(index: number) {
-    ws.sendCommand({ cmd: 'play_index', node_id: ws.getNodeId(), index });
+    ws.sendCommand({ cmd: 'play_index', index });
   }
 
   function removeTrack(index: number, e: MouseEvent) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'remove_from_queue', node_id: ws.getNodeId(), index });
+    ws.sendCommand({ cmd: 'remove_from_queue', index });
   }
 
   function moveTrack(from: number, to: number, e: MouseEvent) {
     e.stopPropagation();
     if (to >= 0 && to < queue.length) {
-      ws.sendCommand({ cmd: 'move_in_queue', node_id: ws.getNodeId(), from, to });
+      ws.sendCommand({ cmd: 'move_in_queue', from, to });
     }
   }
 
   function clearQueue() {
-    ws.sendCommand({ cmd: 'clear_queue', node_id: ws.getNodeId() });
+    ws.sendCommand({ cmd: 'clear_queue' });
   }
 </script>
 

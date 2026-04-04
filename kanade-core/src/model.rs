@@ -55,18 +55,13 @@ pub enum PlaybackStatus {
 pub struct Node {
     pub id: String,
     pub name: String,
-    pub output_ids: Vec<String>,
-    pub queue: Vec<Track>,
-    pub current_index: Option<usize>,
+    #[serde(default = "default_connected")]
+    pub connected: bool,
     pub status: PlaybackStatus,
     pub position_secs: f64,
     pub volume: u8,
-    pub shuffle: bool,
-    pub repeat: RepeatMode,
 }
 
-impl Node {
-    pub fn current_track(&self) -> Option<&Track> {
-        self.current_index.and_then(|i| self.queue.get(i))
-    }
+fn default_connected() -> bool {
+    true
 }

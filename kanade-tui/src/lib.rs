@@ -26,7 +26,14 @@ pub async fn run(
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(ws_tx.clone());
-    let mut state = PlaybackState { nodes: vec![] };
+    let mut state = PlaybackState {
+        nodes: vec![],
+        selected_node_id: None,
+        queue: vec![],
+        current_index: None,
+        shuffle: false,
+        repeat: kanade_core::model::RepeatMode::Off,
+    };
 
     loop {
         terminal.draw(|f| ui::draw(f, &app, &state))?;

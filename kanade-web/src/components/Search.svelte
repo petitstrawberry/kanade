@@ -33,12 +33,12 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', node_id: ws.getNodeId(), track });
+    ws.sendCommand({ cmd: 'add_to_queue', track });
     showToast(`Added: ${track.title || 'Track'}`);
   }
 
   function playNow(track: Track, tracks: Track[], index: number) {
-    ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks, index });
+    ws.sendCommand({ cmd: 'replace_and_play', tracks, index });
   }
 </script>
 

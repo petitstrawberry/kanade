@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use kanade_core::{error::CoreError, ports::AudioOutput};
 use sha2::{Digest, Sha256};
@@ -44,6 +44,7 @@ impl MpdRenderer {
 impl AudioOutput for MpdRenderer {
     #[instrument(skip(self))]
     async fn play(&self) -> Result<(), CoreError> {
+        info!("mpd-renderer: play");
         self.client.send("play\n").await?;
         Ok(())
     }
@@ -56,6 +57,7 @@ impl AudioOutput for MpdRenderer {
 
     #[instrument(skip(self))]
     async fn stop(&self) -> Result<(), CoreError> {
+        info!("mpd-renderer: stop");
         self.client.send("stop\n").await?;
         Ok(())
     }
@@ -85,6 +87,7 @@ impl AudioOutput for MpdRenderer {
         file_paths: &[String],
         _projection_generation: u64,
     ) -> Result<(), CoreError> {
+        info!(queue_len = file_paths.len(), "mpd-renderer: set_queue");
         let mut cmd = String::from("command_list_begin\nclear\n");
         for path in file_paths {
             let uri = self.media_uri(path);

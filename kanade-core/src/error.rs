@@ -8,6 +8,9 @@ pub enum CoreError {
     #[error("node not found")]
     NodeNotFound,
 
+    #[error("no active output selected")]
+    NoActiveOutput,
+
     #[error("queue is empty")]
     QueueEmpty,
 

@@ -20,6 +20,7 @@ pub struct SavedNodeState {
     pub node_id: String,
     pub queue_file_paths: Vec<String>,
     pub current_index: Option<usize>,
+    pub active_output_id: Option<String>,
     pub volume: u8,
     pub shuffle: bool,
     pub repeat: String,
@@ -240,9 +241,10 @@ impl Database {
     }
 
     pub fn load_all_node_states(&self) -> anyhow::Result<Vec<SavedNodeState>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM playback_state ORDER BY node_id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT node_id, queue, current_index, volume, shuffle, repeat, active_output_id
+                 FROM playback_state ORDER BY node_id",
+        )?;
         let mut rows = stmt.query([])?;
         let mut out = Vec::new();
 
@@ -263,11 +265,13 @@ impl Database {
                 .map_err(|_| anyhow::anyhow!("invalid volume: {volume_i64}"))?;
             let shuffle = row.get::<_, i64>(4)? != 0;
             let repeat: String = row.get(5)?;
+            let active_output_id: Option<String> = row.get(6)?;
 
             out.push(SavedNodeState {
                 node_id,
                 queue_file_paths,
                 current_index,
+                active_output_id,
                 volume,
                 shuffle,
                 repeat,
@@ -275,6 +279,69 @@ impl Database {
         }
 
         Ok(out)
+    }
+
+    pub fn save_playback_state(
+        &self,
+        queue_file_paths: &[String],
+        current_index: Option<usize>,
+        active_output_id: Option<String>,
+        shuffle: bool,
+        repeat: &str,
+    ) -> anyhow::Result<()> {
+        let queue_json = serde_json::to_string(queue_file_paths)?;
+        let current_index = current_index.map(|i| i as i64);
+        let shuffle = i64::from(shuffle as u8);
+
+        self.conn.execute(
+            r#"INSERT INTO playback_state (node_id, queue, current_index, active_output_id, volume, shuffle, repeat, updated_at)
+               VALUES ('__global__', ?1, ?2, ?3, 50, ?4, ?5, unixepoch())
+               ON CONFLICT(node_id) DO UPDATE SET
+                   queue         = excluded.queue,
+                   current_index = excluded.current_index,
+                    active_output_id = excluded.active_output_id,
+                   shuffle       = excluded.shuffle,
+                   repeat        = excluded.repeat,
+                   updated_at    = unixepoch()"#,
+            params![queue_json, current_index, active_output_id, shuffle, repeat],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_playback_state(&self) -> anyhow::Result<Option<SavedNodeState>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT node_id, queue, current_index, volume, shuffle, repeat, active_output_id
+                 FROM playback_state WHERE node_id = '__global__'",
+        )?;
+        let mut rows = stmt.query([])?;
+
+        if let Some(row) = rows.next()? {
+            let queue_json: String = row.get(1)?;
+            let queue_file_paths: Vec<String> = serde_json::from_str(&queue_json)?;
+
+            let current_index = row
+                .get::<_, Option<i64>>(2)?
+                .map(|i| {
+                    usize::try_from(i).map_err(|_| anyhow::anyhow!("invalid current_index: {i}"))
+                })
+                .transpose()?;
+
+            let shuffle = row.get::<_, i64>(4)? != 0;
+            let repeat: String = row.get(5)?;
+            let active_output_id: Option<String> = row.get(6)?;
+
+            return Ok(Some(SavedNodeState {
+                node_id: "__global__".to_string(),
+                queue_file_paths,
+                current_index,
+                active_output_id,
+                volume: 50,
+                shuffle,
+                repeat,
+            }));
+        }
+
+        Ok(None)
     }
 
     // ------------------------------------------------------------------
@@ -802,6 +869,7 @@ mod tests {
                 node_id: "node-a".to_string(),
                 queue_file_paths: queue,
                 current_index: Some(1),
+                active_output_id: None,
                 volume: 77,
                 shuffle: true,
                 repeat: "all".to_string(),
@@ -857,5 +925,25 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         let states = db.load_all_node_states().unwrap();
         assert!(states.is_empty());
+    }
+
+    #[test]
+    fn save_and_load_playback_state_with_active_output() {
+        let db = Database::open_in_memory().unwrap();
+        let queue = vec![
+            "/music/album/01.flac".to_string(),
+            "/music/album/02.flac".to_string(),
+        ];
+
+        db.save_playback_state(&queue, Some(1), Some("node-a".to_string()), true, "all")
+            .unwrap();
+
+        let state = db.load_playback_state().unwrap().unwrap();
+        assert_eq!(state.node_id, "__global__");
+        assert_eq!(state.queue_file_paths, queue);
+        assert_eq!(state.current_index, Some(1));
+        assert_eq!(state.active_output_id.as_deref(), Some("node-a"));
+        assert!(state.shuffle);
+        assert_eq!(state.repeat, "all");
     }
 }

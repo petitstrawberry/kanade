@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { ws, mediaBase, selectNode } from '../lib/stores';
+  import { ws, mediaBase } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
   let { onOpenNowPlaying }: { onOpenNowPlaying: () => void } = $props();
 
   let showNodePicker = $state(false);
-  let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
-  let currentTrack = $derived(node?.queue[node.current_index ?? -1]);
+  let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
+  let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
   let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
   let isPlaying = $derived(node?.status === 'playing');
   let position = $derived(node?.position_secs ?? 0);
@@ -15,35 +15,37 @@
 
   function togglePlay() {
     if (!node) return;
-    if (isPlaying) ws.sendCommand({ cmd: 'pause', node_id: ws.getNodeId() });
-    else ws.sendCommand({ cmd: 'play', node_id: ws.getNodeId() });
+    if (isPlaying) {
+      ws.sendCommand({ cmd: 'pause' });
+    } else {
+      ws.sendCommand({ cmd: 'play' });
+    }
   }
 
-  function playNext() { ws.sendCommand({ cmd: 'next', node_id: ws.getNodeId() }); }
-  function playPrev() { ws.sendCommand({ cmd: 'previous', node_id: ws.getNodeId() }); }
+  function playNext() { ws.sendCommand({ cmd: 'next' }); }
+  function playPrev() { ws.sendCommand({ cmd: 'previous' }); }
 
   function seek(e: MouseEvent) {
     if (!duration || !node) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    ws.sendCommand({ cmd: 'seek', node_id: ws.getNodeId(), position_secs: pct * duration });
+    ws.sendCommand({ cmd: 'seek', position_secs: pct * duration });
   }
 
   function setVolume(e: Event) {
-    ws.sendCommand({ cmd: 'set_volume', node_id: ws.getNodeId(), volume: parseInt((e.target as HTMLInputElement).value) });
+    ws.sendCommand({ cmd: 'set_volume', volume: parseInt((e.target as HTMLInputElement).value) });
   }
 
   function adjustVolume(delta: number) {
     const v = Math.max(0, Math.min(100, volume + delta));
-    ws.sendCommand({ cmd: 'set_volume', node_id: ws.getNodeId(), volume: v });
+    ws.sendCommand({ cmd: 'set_volume', volume: v });
   }
 
-  function toggleShuffle() { if (node) ws.sendCommand({ cmd: 'set_shuffle', node_id: ws.getNodeId(), shuffle: !node.shuffle }); }
+  function toggleShuffle() { ws.sendCommand({ cmd: 'set_shuffle', shuffle: !ws.shuffle }); }
 
   function toggleRepeat() {
-    if (!node) return;
     const m: Record<string, 'off' | 'one' | 'all'> = { off: 'all', all: 'one', one: 'off' };
-    ws.sendCommand({ cmd: 'set_repeat', node_id: ws.getNodeId(), repeat: m[node.repeat] });
+    ws.sendCommand({ cmd: 'set_repeat', repeat: m[ws.repeat] });
   }
 </script>
 
@@ -75,7 +77,7 @@
 
   <div class="center-col">
     <div class="controls">
-      <button class="btn ic-small {node?.shuffle ? 'active' : ''}" onclick={toggleShuffle}>
+      <button class="btn ic-small {ws.shuffle ? 'active' : ''}" onclick={toggleShuffle}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
       </button>
       <button class="btn ic-small" onclick={playPrev}>
@@ -91,8 +93,8 @@
       <button class="btn ic-small" onclick={playNext}>
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><path d="M4 3l10 6-10 6V3z"/><rect x="14" y="3" width="3" height="12" rx="1"/></svg>
       </button>
-      <button class="btn ic-small {node?.repeat !== 'off' ? 'active' : ''}" onclick={toggleRepeat}>
-        {#if node?.repeat === 'one'}
+      <button class="btn ic-small {ws.repeat !== 'off' ? 'active' : ''}" onclick={toggleRepeat}>
+        {#if ws.repeat === 'one'}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
         {:else}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/></svg>
@@ -130,11 +132,16 @@
             <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3l3 4 3-4z"/></svg>
           </button>
           {#if showNodePicker}
-            {#each ws.nodes as n}
-              <button class="node-option" class:active={n.id === node?.id} onclick={() => { selectNode(n.id); showNodePicker = false; }}>
-                {n.name}
-              </button>
-            {/each}
+            <div class="node-menu">
+              {#each ws.nodes as n (n.id)}
+                <button class="node-option" class:active={n.id === node?.id} onclick={() => { 
+                  ws.sendCommand({ cmd: 'select_node', node_id: n.id });
+                  showNodePicker = false; 
+                }}>
+                  {n.name}
+                </button>
+              {/each}
+            </div>
           {/if}
         </div>
       {:else if node}
@@ -334,7 +341,7 @@
     position: relative;
   }
 
-  .node-picker > button + * {
+  .node-menu {
     position: absolute;
     bottom: 100%;
     right: 0;
@@ -345,6 +352,9 @@
     min-width: 120px;
     z-index: 50;
     box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .node-btn {

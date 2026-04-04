@@ -97,7 +97,20 @@ export class AudioPlayer {
     this.audio.addEventListener('error', this.handleError);
   }
 
+  async primePlayback(): Promise<void> {
+    if (!this.audio.src && this.playlist.length > 0) {
+      this.audio.src = this.playlist[this.state.currentSongIndex] ?? this.playlist[0];
+    }
+    try {
+      await this.audio.play();
+      this.audio.pause();
+      this.audio.currentTime = 0;
+    } catch {
+    }
+  }
+
   setQueue(filePaths: string[], projectionGeneration: number): void {
+    console.log('AudioPlayer.setQueue', { filePaths, projectionGeneration });
     this.playlist = [...filePaths];
     this.state.currentSongIndex = 0;
     this.state.projectionGeneration = projectionGeneration;
@@ -114,6 +127,7 @@ export class AudioPlayer {
 
     this.audio.pause();
     this.audio.src = this.playlist[0];
+    console.log('AudioPlayer.src', this.audio.src);
     this.state.status = 'loading';
     this.emitState(true);
   }
@@ -187,6 +201,7 @@ export class AudioPlayer {
     if (!this.audio.src) {
       this.audio.src = this.playlist[this.state.currentSongIndex] ?? this.playlist[0];
     }
+    console.log('AudioPlayer.play', { src: this.audio.src, index: this.state.currentSongIndex, playlistLength: this.playlist.length });
     this.state.status = 'loading';
     this.emitState(true);
     void this.audio.play().catch((err) => {
@@ -201,6 +216,7 @@ export class AudioPlayer {
   }
 
   stop(): void {
+    console.log('AudioPlayer.stop', { src: this.audio.src, currentTime: this.audio.currentTime });
     this.audio.pause();
     this.audio.currentTime = 0;
     this.state.positionSecs = 0;

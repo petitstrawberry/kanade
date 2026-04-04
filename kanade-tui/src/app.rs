@@ -17,6 +17,13 @@ pub enum Panel {
 }
 
 impl Panel {
+    const ALL: [Panel; 4] = [
+        Panel::NowPlaying,
+        Panel::Queue,
+        Panel::Library,
+        Panel::Search,
+    ];
+
     pub fn title(&self) -> &str {
         match self {
             Panel::NowPlaying => "Now Playing",
@@ -45,7 +52,7 @@ impl Panel {
     }
 
     pub fn all() -> &'static [Panel] {
-        &[Panel::NowPlaying, Panel::Queue, Panel::Library, Panel::Search]
+        &Self::ALL
     }
 }
 
@@ -233,7 +240,9 @@ impl App {
             self.library_selected_artist = None;
             self.library_selected_genre = None;
             self.library_detail.borrow_mut().select(None);
-        } else if self.library_level == 1 && (self.library_mode == LibraryMode::Artists || self.library_mode == LibraryMode::Genres) {
+        } else if self.library_level == 1
+            && (self.library_mode == LibraryMode::Artists || self.library_mode == LibraryMode::Genres)
+        {
             self.artist_tracks.clear();
             self.genre_tracks.clear();
             self.library_detail.borrow_mut().select(None);
@@ -243,7 +252,9 @@ impl App {
     fn library_enter_album_tracks(&mut self) {
         let idx = self.library_list.borrow().selected();
         let Some(i) = idx else { return };
-        let Some(album) = self.albums.get(i) else { return };
+        let Some(album) = self.albums.get(i) else {
+            return;
+        };
 
         self.req_counter += 1;
         let req_id = self.req_counter;
@@ -252,17 +263,21 @@ impl App {
         self.library_level = 1;
         self.library_detail.borrow_mut().select(None);
         tokio::spawn(async move {
-            let _ = tx.send(ClientMessage::Request {
-                req_id,
-                req: WsRequest::GetAlbumTracks { album_id },
-            }).await;
+            let _ = tx
+                .send(ClientMessage::Request {
+                    req_id,
+                    req: WsRequest::GetAlbumTracks { album_id },
+                })
+                .await;
         });
     }
 
     fn library_enter_artist_albums(&mut self) {
         let idx = self.library_list.borrow().selected();
         let Some(i) = idx else { return };
-        let Some(artist) = self.artists.get(i) else { return };
+        let Some(artist) = self.artists.get(i) else {
+            return;
+        };
 
         let artist = artist.clone();
         self.library_selected_artist = Some(artist.clone());
@@ -272,10 +287,12 @@ impl App {
         self.library_level = 1;
         self.library_detail.borrow_mut().select(None);
         tokio::spawn(async move {
-            let _ = tx.send(ClientMessage::Request {
-                req_id,
-                req: WsRequest::GetArtistAlbums { artist },
-            }).await;
+            let _ = tx
+                .send(ClientMessage::Request {
+                    req_id,
+                    req: WsRequest::GetArtistAlbums { artist },
+                })
+                .await;
         });
     }
 
@@ -300,10 +317,12 @@ impl App {
                 self.library_level = 2;
                 self.library_detail.borrow_mut().select(None);
                 tokio::spawn(async move {
-                    let _ = tx.send(ClientMessage::Request {
-                        req_id,
-                        req: WsRequest::GetAlbumTracks { album_id },
-                    }).await;
+                    let _ = tx
+                        .send(ClientMessage::Request {
+                            req_id,
+                            req: WsRequest::GetAlbumTracks { album_id },
+                        })
+                        .await;
                 });
             }
         }
@@ -317,17 +336,21 @@ impl App {
         self.library_level = 2;
         self.library_detail.borrow_mut().select(None);
         tokio::spawn(async move {
-            let _ = tx.send(ClientMessage::Request {
-                req_id,
-                req: WsRequest::GetArtistTracks { artist },
-            }).await;
+            let _ = tx
+                .send(ClientMessage::Request {
+                    req_id,
+                    req: WsRequest::GetArtistTracks { artist },
+                })
+                .await;
         });
     }
 
     fn library_enter_genre_albums(&mut self) {
         let idx = self.library_list.borrow().selected();
         let Some(i) = idx else { return };
-        let Some(genre) = self.genres.get(i) else { return };
+        let Some(genre) = self.genres.get(i) else {
+            return;
+        };
 
         let genre = genre.clone();
         self.library_selected_genre = Some(genre.clone());
@@ -337,10 +360,12 @@ impl App {
         self.library_level = 1;
         self.library_detail.borrow_mut().select(None);
         tokio::spawn(async move {
-            let _ = tx.send(ClientMessage::Request {
-                req_id,
-                req: WsRequest::GetGenreAlbums { genre },
-            }).await;
+            let _ = tx
+                .send(ClientMessage::Request {
+                    req_id,
+                    req: WsRequest::GetGenreAlbums { genre },
+                })
+                .await;
         });
     }
 
@@ -356,19 +381,21 @@ impl App {
             self.library_enter_genre_all_tracks(&genre);
         } else {
             let album_idx = i - 1;
-        if let Some(album) = self.genre_albums.get(album_idx) {
-            self.genre_tracks.clear();
-            self.req_counter += 1;
+            if let Some(album) = self.genre_albums.get(album_idx) {
+                self.genre_tracks.clear();
+                self.req_counter += 1;
                 let req_id = self.req_counter;
                 let album_id = album.id.clone();
                 let tx = self.ws_tx.clone();
                 self.library_level = 2;
                 self.library_detail.borrow_mut().select(None);
                 tokio::spawn(async move {
-                    let _ = tx.send(ClientMessage::Request {
-                        req_id,
-                        req: WsRequest::GetAlbumTracks { album_id },
-                    }).await;
+                    let _ = tx
+                        .send(ClientMessage::Request {
+                            req_id,
+                            req: WsRequest::GetAlbumTracks { album_id },
+                        })
+                        .await;
                 });
             }
         }
@@ -383,10 +410,12 @@ impl App {
         self.library_level = 2;
         self.library_detail.borrow_mut().select(None);
         tokio::spawn(async move {
-            let _ = tx.send(ClientMessage::Request {
-                req_id,
-                req: WsRequest::GetGenreTracks { genre },
-            }).await;
+            let _ = tx
+                .send(ClientMessage::Request {
+                    req_id,
+                    req: WsRequest::GetGenreTracks { genre },
+                })
+                .await;
         });
     }
 
@@ -401,7 +430,9 @@ impl App {
             WsResponse::AlbumTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.album_tracks = tracks;
-                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
+                self.library_detail
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
             }
             WsResponse::Artists { artists } => {
                 self.artists = artists;
@@ -412,12 +443,16 @@ impl App {
             WsResponse::ArtistAlbums { albums } => {
                 let empty = albums.is_empty();
                 self.artist_albums = albums;
-                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
+                self.library_detail
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
             }
             WsResponse::ArtistTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.artist_tracks = tracks;
-                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
+                self.library_detail
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
             }
             WsResponse::Genres { genres } => {
                 self.genres = genres;
@@ -428,25 +463,34 @@ impl App {
             WsResponse::GenreAlbums { albums } => {
                 let empty = albums.is_empty();
                 self.genre_albums = albums;
-                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
+                self.library_detail
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
             }
             WsResponse::GenreTracks { tracks } => {
                 let empty = tracks.is_empty();
                 self.genre_tracks = tracks;
-                self.library_detail.borrow_mut().select(if empty { None } else { Some(0) });
+                self.library_detail
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
             }
             WsResponse::SearchResults { tracks } => {
                 let empty = tracks.is_empty();
                 self.search_results = tracks;
-                self.search_list.borrow_mut().select(if empty { None } else { Some(0) });
+                self.search_list
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
             }
-            WsResponse::Queue { tracks: _, current_index: _ } => {}
+            WsResponse::Queue {
+                tracks: _,
+                current_index: _,
+            } => {}
         }
     }
 
     pub async fn handle_event(&mut self, event: AppEvent, state: &PlaybackState) {
         let AppEvent::Key(key) = event;
-        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
+        let node_id = state.selected_node_id.as_deref().unwrap_or("");
 
         if self.active_panel == Panel::Search && self.in_search_input {
             match key.code {
@@ -510,14 +554,11 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                if self.active_panel != Panel::Search {
+                if self.active_panel != Panel::Search && !node_id.is_empty() {
                     let tx = self.ws_tx.clone();
-                    let nid = node_id.clone();
                     let cmd = match state.node(&node_id).map(|n| &n.status) {
-                        Some(kanade_core::model::PlaybackStatus::Playing) => {
-                            WsCommand::Pause { node_id: nid.clone() }
-                        }
-                        _ => WsCommand::Play { node_id: nid.clone() },
+                        Some(kanade_core::model::PlaybackStatus::Playing) => WsCommand::Pause,
+                        _ => WsCommand::Play,
                     };
                     tokio::spawn(async move {
                         let _ = tx.send(ClientMessage::Command(cmd)).await;
@@ -527,54 +568,45 @@ impl App {
             KeyCode::Char('n') => {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
-                    let nid = node_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::Next { node_id: nid })).await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Next)).await;
                     });
                 }
             }
             KeyCode::Char('p') => {
                 if self.active_panel != Panel::Search {
                     let tx = self.ws_tx.clone();
-                    let nid = node_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::Previous { node_id: nid })).await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Previous)).await;
                     });
                 }
             }
             KeyCode::Char('s') => {
-                if self.active_panel != Panel::Search {
+                if self.active_panel != Panel::Search && !node_id.is_empty() {
                     let tx = self.ws_tx.clone();
-                    let nid = node_id.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::Stop { node_id: nid })).await;
+                        let _ = tx.send(ClientMessage::Command(WsCommand::Stop)).await;
                     });
                 }
             }
             KeyCode::Char('+') | KeyCode::Char('=') => {
-                if self.active_panel != Panel::Search {
-                    if let Some(node) = state.node(&node_id) {
+                if self.active_panel != Panel::Search && !node_id.is_empty() {
+                    if let Some(node) = state.node(node_id) {
                         let vol = node.volume.saturating_add(5).min(100);
                         let tx = self.ws_tx.clone();
-                        let nid = node_id.clone();
                         tokio::spawn(async move {
-                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume {
-                                node_id: nid, volume: vol,
-                            })).await;
+                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume { volume: vol })).await;
                         });
                     }
                 }
             }
             KeyCode::Char('-') => {
-                if self.active_panel != Panel::Search {
-                    if let Some(node) = state.node(&node_id) {
+                if self.active_panel != Panel::Search && !node_id.is_empty() {
+                    if let Some(node) = state.node(node_id) {
                         let vol = node.volume.saturating_sub(5);
                         let tx = self.ws_tx.clone();
-                        let nid = node_id.clone();
                         tokio::spawn(async move {
-                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume {
-                                node_id: nid, volume: vol,
-                            })).await;
+                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume { volume: vol })).await;
                         });
                     }
                 }
@@ -616,6 +648,24 @@ impl App {
             KeyCode::Char('J') => {
                 if self.active_panel == Panel::Queue {
                     self.queue_move_down(state);
+                }
+            }
+            KeyCode::Char('B') => {
+                if state.nodes.len() > 1 {
+                    let current_node_id = state.selected_node_id.as_deref();
+                    let current_index = current_node_id
+                        .and_then(|id| state.nodes.iter().position(|n| n.id == id))
+                        .unwrap_or(0);
+                    let next_index = (current_index + 1) % state.nodes.len();
+                    if let Some(next_node) = state.nodes.get(next_index) {
+                        let tx = self.ws_tx.clone();
+                        let node_id = next_node.id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx.send(ClientMessage::Command(WsCommand::SelectNode {
+                                node_id,
+                            })).await;
+                        });
+                    }
                 }
             }
             KeyCode::Char('K') => {
@@ -672,12 +722,9 @@ impl App {
     }
 
     fn select_next(&self, state: &PlaybackState) {
-        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         match self.active_panel {
             Panel::Queue => {
-                let len = state.node(&node_id)
-                    .map(|n| n.queue.len())
-                    .unwrap_or(0);
+                let len = state.queue.len();
                 let mut list = self.queue_list.borrow_mut();
                 let cur = list.selected().unwrap_or(0);
                 if len == 0 || cur + 1 < len {
@@ -721,18 +768,14 @@ impl App {
     }
 
     fn queue_remove(&self, state: &PlaybackState) {
-        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
-            let queue_len = state.node(&node_id)
-                .map(|n| n.queue.len())
-                .unwrap_or(0);
+            let queue_len = state.queue.len();
             if i < queue_len {
                 let tx = self.ws_tx.clone();
-                let nid = node_id;
                 tokio::spawn(async move {
                     let _ = tx.send(ClientMessage::Command(WsCommand::RemoveFromQueue {
-                        node_id: nid, index: i,
+                        index: i,
                     })).await;
                 });
             }
@@ -740,21 +783,17 @@ impl App {
     }
 
     fn queue_move_up(&self, state: &PlaybackState) {
-        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
             if i == 0 {
                 return;
             }
-            let queue_len = state.node(&node_id)
-                .map(|n| n.queue.len())
-                .unwrap_or(0);
+            let queue_len = state.queue.len();
             if i < queue_len {
                 let tx = self.ws_tx.clone();
-                let nid = node_id;
                 tokio::spawn(async move {
                     let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
-                        node_id: nid, from: i, to: i - 1,
+                        from: i, to: i - 1,
                     })).await;
                 });
                 let _ = idx;
@@ -764,20 +803,16 @@ impl App {
     }
 
     fn queue_move_down(&self, state: &PlaybackState) {
-        let node_id = state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
         let idx = self.queue_list.borrow().selected();
         if let Some(i) = idx {
-            let queue_len = state.node(&node_id)
-                .map(|n| n.queue.len())
-                .unwrap_or(0);
+            let queue_len = state.queue.len();
             if i + 1 >= queue_len {
                 return;
             }
             let tx = self.ws_tx.clone();
-            let nid = node_id;
             tokio::spawn(async move {
                 let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
-                    node_id: nid, from: i, to: i + 1,
+                    from: i, to: i + 1,
                 })).await;
             });
             let _ = idx;
@@ -786,8 +821,6 @@ impl App {
     }
 
     async fn select_item(&mut self, _state: &PlaybackState) {
-        let node_id = _state.nodes.first().map(|n| n.id.clone()).unwrap_or_default();
-
         match self.active_panel {
             Panel::Library => {
                 if self.library_level > 0 {
@@ -797,7 +830,7 @@ impl App {
                             let tx = self.ws_tx.clone();
                             tokio::spawn(async move {
                                 let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                    node_id, track,
+                                    track,
                                 })).await;
                             });
                         }
@@ -813,7 +846,7 @@ impl App {
                         let tx = self.ws_tx.clone();
                         tokio::spawn(async move {
                             let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                node_id, track,
+                                track,
                             })).await;
                         });
                     }
@@ -825,7 +858,7 @@ impl App {
                     let tx = self.ws_tx.clone();
                     tokio::spawn(async move {
                         let _ = tx.send(ClientMessage::Command(WsCommand::PlayIndex {
-                            node_id, index: i,
+                            index: i,
                         })).await;
                     });
                 }

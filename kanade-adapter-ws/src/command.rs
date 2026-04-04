@@ -5,66 +5,23 @@ use kanade_core::model::{Album, RepeatMode, Track};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum WsCommand {
-    Play {
-        node_id: String,
-    },
-    Pause {
-        node_id: String,
-    },
-    Stop {
-        node_id: String,
-    },
-    Next {
-        node_id: String,
-    },
-    Previous {
-        node_id: String,
-    },
-    Seek {
-        node_id: String,
-        position_secs: f64,
-    },
-    SetVolume {
-        node_id: String,
-        volume: u8,
-    },
-    SetRepeat {
-        node_id: String,
-        repeat: RepeatMode,
-    },
-    SetShuffle {
-        node_id: String,
-        shuffle: bool,
-    },
-    AddToQueue {
-        node_id: String,
-        track: Track,
-    },
-    AddTracksToQueue {
-        node_id: String,
-        tracks: Vec<Track>,
-    },
-    PlayIndex {
-        node_id: String,
-        index: usize,
-    },
-    RemoveFromQueue {
-        node_id: String,
-        index: usize,
-    },
-    MoveInQueue {
-        node_id: String,
-        from: usize,
-        to: usize,
-    },
-    ClearQueue {
-        node_id: String,
-    },
-    ReplaceAndPlay {
-        node_id: String,
-        tracks: Vec<Track>,
-        index: usize,
-    },
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Previous,
+    Seek { position_secs: f64 },
+    SetVolume { volume: u8 },
+    SetRepeat { repeat: RepeatMode },
+    SetShuffle { shuffle: bool },
+    SelectNode { node_id: String },
+    AddToQueue { track: Track },
+    AddTracksToQueue { tracks: Vec<Track> },
+    PlayIndex { index: usize },
+    RemoveFromQueue { index: usize },
+    MoveInQueue { from: usize, to: usize },
+    ClearQueue,
+    ReplaceAndPlay { tracks: Vec<Track>, index: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +36,7 @@ pub enum WsRequest {
     GetGenreAlbums { genre: String },
     GetGenreTracks { genre: String },
     Search { query: String },
-    GetQueue { node_id: String },
+    GetQueue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

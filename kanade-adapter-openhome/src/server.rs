@@ -148,17 +148,13 @@ async fn dispatch(
     core: &Core,
 ) -> Result<(), kanade_core::error::CoreError> {
     match action {
-        SoapAction::Play => core.play_node("default").await,
-        SoapAction::Pause => core.pause_node("default").await,
-        SoapAction::Stop => core.stop_node("default").await,
-        SoapAction::Next => core.next_node("default").await,
-        SoapAction::Previous => core.previous_node("default").await,
-        SoapAction::SeekSecondAbsolute { seconds } => {
-            core.seek_node("default", seconds as f64).await
-        }
-        SoapAction::SetVolume { volume } => {
-            core.set_node_volume("default", volume).await
-        }
+        SoapAction::Play => core.play().await,
+        SoapAction::Pause => core.pause().await,
+        SoapAction::Stop => core.stop().await,
+        SoapAction::Next => core.next().await,
+        SoapAction::Previous => core.previous().await,
+        SoapAction::SeekSecondAbsolute { seconds } => core.seek(seconds as f64).await,
+        SoapAction::SetVolume { volume } => core.set_volume(volume).await,
         SoapAction::Unknown(name) => {
             warn!("OpenHome: unhandled action: {name}");
             Ok(())

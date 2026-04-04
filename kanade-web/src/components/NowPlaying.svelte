@@ -6,8 +6,8 @@
 
   let { visible = false, onClose }: { visible: boolean; onClose: () => void } = $props();
 
-  let node = $derived(ws.nodes.find(n => n.id === ws.getNodeId()));
-  let currentTrack = $derived(node?.queue[node.current_index ?? -1]);
+  let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
+  let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
   let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
   let showDetails = $state(false);
   
@@ -20,20 +20,20 @@
     e.stopPropagation();
     if (!node) return;
     if (isPlaying) {
-      ws.sendCommand({ cmd: 'pause', node_id: ws.getNodeId() });
+      ws.sendCommand({ cmd: 'pause' });
     } else {
-      ws.sendCommand({ cmd: 'play', node_id: ws.getNodeId() });
+      ws.sendCommand({ cmd: 'play' });
     }
   }
 
   function playNext(e: Event) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'next', node_id: ws.getNodeId() });
+    ws.sendCommand({ cmd: 'next' });
   }
 
   function playPrev(e: Event) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'previous', node_id: ws.getNodeId() });
+    ws.sendCommand({ cmd: 'previous' });
   }
 
   function seek(e: MouseEvent) {
@@ -42,29 +42,28 @@
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const newPos = percent * duration;
-    ws.sendCommand({ cmd: 'seek', node_id: ws.getNodeId(), position_secs: newPos });
+    ws.sendCommand({ cmd: 'seek', position_secs: newPos });
   }
 
   function setVolume(e: Event) {
     e.stopPropagation();
     const input = e.target as HTMLInputElement;
-    ws.sendCommand({ cmd: 'set_volume', node_id: ws.getNodeId(), volume: parseInt(input.value) });
+    ws.sendCommand({ cmd: 'set_volume', volume: parseInt(input.value) });
   }
 
   function toggleShuffle(e: Event) {
     e.stopPropagation();
-    if (node) ws.sendCommand({ cmd: 'set_shuffle', node_id: ws.getNodeId(), shuffle: !node.shuffle });
+    ws.sendCommand({ cmd: 'set_shuffle', shuffle: !ws.shuffle });
   }
 
   function toggleRepeat(e: Event) {
     e.stopPropagation();
-    if (!node) return;
     const map: Record<string, 'off' | 'one' | 'all'> = {
       'off': 'all',
       'all': 'one',
       'one': 'off'
     };
-    ws.sendCommand({ cmd: 'set_repeat', node_id: ws.getNodeId(), repeat: map[node.repeat] });
+    ws.sendCommand({ cmd: 'set_repeat', repeat: map[ws.repeat] });
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -153,7 +152,7 @@
           </div>
 
           <div class="buttons">
-            <button class="icon sm" class:active={node?.shuffle} onclick={toggleShuffle}>
+            <button class="icon sm" class:active={ws.shuffle} onclick={toggleShuffle}>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
             </button>
             <button class="icon" onclick={playPrev}>
@@ -169,8 +168,8 @@
             <button class="icon" onclick={playNext}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5l10 7-10 7V5z"/><rect x="17" y="5" width="4" height="14" rx="1"/></svg>
             </button>
-            <button class="icon sm" class:active={node?.repeat !== 'off'} onclick={toggleRepeat}>
-              {#if node?.repeat === 'one'}
+            <button class="icon sm" class:active={ws.repeat !== 'off'} onclick={toggleRepeat}>
+              {#if ws.repeat === 'one'}
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
               {:else}
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/></svg>

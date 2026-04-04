@@ -6,6 +6,8 @@ type RegistrationAck = {
   media_base_url: string;
 };
 
+const BROWSER_SESSION_NODE_ID_KEY = 'kanade-browser-session-node-id';
+
 type NodeCommand =
   | { type: 'play' }
   | { type: 'pause' }
@@ -63,6 +65,7 @@ export class BrowserNode {
   private ws: WebSocket | null = null;
   private wsUrl: string | null = null;
   private name: string | null = null;
+  private logicalNodeId: string | null = null;
   private nodeId: string | null = null;
   private mediaBaseUrl: string | null = null;
   private registered = false;
@@ -84,6 +87,7 @@ export class BrowserNode {
   connect(wsUrl: string, name: string): void {
     this.wsUrl = wsUrl;
     this.name = name;
+    this.logicalNodeId = this.getOrCreateSessionNodeId(name);
     this.shouldReconnect = true;
     this.retryCount = 0;
     this.clearReconnectTimeout();
@@ -126,6 +130,10 @@ export class BrowserNode {
 
   isConnected(): boolean {
     return this.registered && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  getLogicalNodeId(): string | null {
+    return this.logicalNodeId;
   }
 
   private toHttpUrl(filePath: string): string {
@@ -187,13 +195,22 @@ export class BrowserNode {
   }
 
   private sendRegistration(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.name) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.name || !this.logicalNodeId) return;
     try {
-      this.ws.send(JSON.stringify({ name: this.name }));
-      console.log(`BrowserNode registering: ${this.name}`);
+      this.ws.send(JSON.stringify({ node_id: this.logicalNodeId, display_name: this.name }));
+      console.log(`BrowserNode registering: ${this.logicalNodeId} (${this.name})`);
     } catch (error) {
       console.warn('BrowserNode failed to send registration', error);
     }
+  }
+
+  private getOrCreateSessionNodeId(name: string): string {
+    const existing = window.sessionStorage.getItem(BROWSER_SESSION_NODE_ID_KEY);
+    if (existing) return existing;
+
+    const generated = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'browser'}-${crypto.randomUUID()}`;
+    window.sessionStorage.setItem(BROWSER_SESSION_NODE_ID_KEY, generated);
+    return generated;
   }
 
   private handleMessage(raw: string): void {
@@ -233,6 +250,7 @@ export class BrowserNode {
   }
 
   private handleCommand(command: NodeCommand): void {
+    console.log('BrowserNode command', command);
     switch (command.type) {
       case 'play':
         this.safePlayerCall(() => this.player.play());

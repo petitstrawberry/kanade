@@ -1,17 +1,16 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 
 use anyhow::Result;
 use kanade_core::{
     controller::Core,
-    model::{Node, PlaybackStatus, RepeatMode},
+    model::RepeatMode,
     ports::{EventBroadcaster, StatePersister},
     state::PlaybackState,
 };
 use kanade_scanner::spawn_background_scan;
-use tokio::sync::RwLock;
 use tracing::info;
 
-use kanade_adapter_node_server::{NodeServer, RestoredNodeState};
+use kanade_adapter_node_server::NodeServer;
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{WsBroadcaster, WsServer};
 
@@ -55,74 +54,59 @@ async fn main() -> Result<()> {
     let core = Arc::new(core_instance);
 
     let db_for_restore = Arc::clone(&db);
-    let restored_states = tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, RestoredNodeState>> {
+    let restored = tokio::task::spawn_blocking(move || -> anyhow::Result<PlaybackState> {
         let db = db_for_restore
             .lock()
             .map_err(|e| anyhow::anyhow!("database mutex poisoned: {e}"))?;
 
-        let saved = db.load_all_node_states()?;
-        let mut restored = HashMap::new();
+        let saved = db.load_playback_state()?;
 
-        for saved_node in saved {
-            let queue = saved_node
-                .queue_file_paths
-                .iter()
-                .filter_map(|path| match db.get_track_by_path(path) {
-                    Ok(track) => track,
-                    Err(e) => {
-                        tracing::warn!(node_id = %saved_node.node_id, file_path = %path, error = %e, "failed to load track while restoring node state");
-                        None
-                    }
-                })
-                .collect();
+        match saved {
+            Some(saved_state) => {
+                let queue = saved_state
+                    .queue_file_paths
+                    .iter()
+                    .filter_map(|path| match db.get_track_by_path(path) {
+                        Ok(track) => track,
+                        Err(e) => {
+                            tracing::warn!(file_path = %path, error = %e, "failed to load track while restoring state");
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
 
-            let repeat = match saved_node.repeat.as_str() {
-                "one" => RepeatMode::One,
-                "all" => RepeatMode::All,
-                _ => RepeatMode::Off,
-            };
+                let current_index = saved_state
+                    .current_index
+                    .filter(|idx| *idx < queue.len());
 
-            restored.insert(
-                saved_node.node_id,
-                RestoredNodeState {
+                let repeat = match saved_state.repeat.as_str() {
+                    "one" => RepeatMode::One,
+                    "all" => RepeatMode::All,
+                    _ => RepeatMode::Off,
+                };
+
+                Ok(PlaybackState {
+                    nodes: Vec::new(),
+                    selected_node_id: saved_state.active_output_id,
                     queue,
-                    current_index: saved_node.current_index,
-                    volume: saved_node.volume,
-                    shuffle: saved_node.shuffle,
+                    current_index,
+                    shuffle: saved_state.shuffle,
                     repeat,
-                },
-            );
+                })
+            }
+            None => Ok(PlaybackState {
+                nodes: Vec::new(),
+                selected_node_id: None,
+                queue: Vec::new(),
+                current_index: None,
+                shuffle: false,
+                repeat: RepeatMode::Off,
+            }),
         }
-
-        Ok(restored)
     })
     .await??;
 
-    let restored_playback = PlaybackState {
-        nodes: restored_states
-            .iter()
-            .map(|(node_id, restored)| {
-                let current_index = restored
-                    .current_index
-                    .filter(|idx| *idx < restored.queue.len());
-                Node {
-                    id: node_id.clone(),
-                    name: node_id.clone(),
-                    output_ids: Vec::new(),
-                    queue: restored.queue.clone(),
-                    current_index,
-                    status: PlaybackStatus::Stopped,
-                    position_secs: 0.0,
-                    volume: restored.volume,
-                    shuffle: restored.shuffle,
-                    repeat: restored.repeat,
-                }
-            })
-            .collect(),
-    };
-    core.restore_state(restored_playback).await;
-
-    let restored_states = Arc::new(RwLock::new(restored_states));
+    core.restore_state(restored).await;
 
     let media_server = MediaServer::new(PathBuf::from(&db_path), media_addr);
     tokio::spawn(async move {
@@ -155,7 +139,6 @@ async fn main() -> Result<()> {
         Arc::clone(&core),
         node_addr,
         media_public_base_url,
-        Arc::clone(&restored_states),
     );
 
     let ws_addr: SocketAddr = std::env::var("WS_ADDR")

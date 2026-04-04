@@ -75,6 +75,23 @@ async fn handle_connection(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
+    // Send current state snapshot immediately so the client
+    // has nodes, queue, and active output without waiting for
+    // the next state change broadcast.
+    let snapshot = core.state_handle().read().await.clone();
+    let node_summary = snapshot
+        .nodes
+        .iter()
+        .map(|n| format!("{}:{}:{}", n.id, n.name, n.connected))
+        .collect::<Vec<_>>()
+        .join(", ");
+    info!(peer = %peer, selected_node_id = ?snapshot.selected_node_id, nodes = %node_summary, "ws initial snapshot");
+    if let Ok(json) = serde_json::to_string(&ServerMessage::State { state: snapshot }) {
+        if ws_tx.send(Message::Text(json)).await.is_err() {
+            return;
+        }
+    }
+
     loop {
         tokio::select! {
             msg = ws_rx.next() => {
@@ -128,24 +145,25 @@ async fn handle_connection(
 async fn dispatch_command(cmd: WsCommand, core: &Core) {
     info!("WS command: {:?}", cmd);
     let result = match cmd {
-        WsCommand::Play { node_id } => core.play_node(&node_id).await,
-        WsCommand::Pause { node_id } => core.pause_node(&node_id).await,
-        WsCommand::Stop { node_id } => core.stop_node(&node_id).await,
-        WsCommand::Next { node_id } => core.next_node(&node_id).await,
-        WsCommand::Previous { node_id } => core.previous_node(&node_id).await,
-        WsCommand::Seek { node_id, position_secs } => core.seek_node(&node_id, position_secs).await,
-        WsCommand::SetVolume { node_id, volume } => core.set_node_volume(&node_id, volume).await,
-        WsCommand::SetRepeat { node_id, repeat } => core.set_node_repeat(&node_id, repeat).await,
-        WsCommand::SetShuffle { node_id, shuffle } => core.set_node_shuffle(&node_id, shuffle).await,
-        WsCommand::AddToQueue { node_id, track } => core.add_to_node_queue(&node_id, track).await,
-        WsCommand::AddTracksToQueue { node_id, tracks } => core.add_tracks_to_node_queue(&node_id, tracks).await,
-        WsCommand::PlayIndex { node_id, index } => core.play_node_index(&node_id, index).await,
-        WsCommand::RemoveFromQueue { node_id, index } => core.remove_from_node_queue(&node_id, index).await,
-        WsCommand::MoveInQueue { node_id, from, to } => core.move_in_node_queue(&node_id, from, to).await,
-        WsCommand::ClearQueue { node_id } => core.clear_node_queue(&node_id).await,
-WsCommand::ReplaceAndPlay { node_id, tracks, index } => {
-    core.set_node_queue(&node_id, tracks, Some(index)).await
-}
+        WsCommand::Play => core.play().await,
+        WsCommand::Pause => core.pause().await,
+        WsCommand::Stop => core.stop().await,
+        WsCommand::Next => core.next().await,
+        WsCommand::Previous => core.previous().await,
+        WsCommand::Seek { position_secs } => core.seek(position_secs).await,
+        WsCommand::SetVolume { volume } => core.set_volume(volume).await,
+        WsCommand::SetRepeat { repeat } => core.set_repeat(repeat).await,
+        WsCommand::SetShuffle { shuffle } => core.set_shuffle(shuffle).await,
+        WsCommand::SelectNode { node_id } => core.select_node(&node_id).await,
+        WsCommand::AddToQueue { track } => core.add_to_queue(track).await,
+        WsCommand::AddTracksToQueue { tracks } => core.add_tracks_to_queue(tracks).await,
+        WsCommand::PlayIndex { index } => core.play_index(index).await,
+        WsCommand::RemoveFromQueue { index } => core.remove_from_queue(index).await,
+        WsCommand::MoveInQueue { from, to } => core.move_in_queue(from, to).await,
+        WsCommand::ClearQueue => core.clear_queue().await,
+        WsCommand::ReplaceAndPlay { tracks, index } => {
+            core.set_queue(tracks, Some(index)).await
+        }
     };
     if let Err(e) = result {
         warn!("WS dispatch error: {e}");
@@ -230,18 +248,12 @@ async fn handle_request(
             }).await.unwrap_or(None).unwrap_or_default();
             WsResponse::SearchResults { tracks }
         }
-        WsRequest::GetQueue { node_id } => {
+        WsRequest::GetQueue => {
             let state = core.state_handle();
             let s = state.read().await;
-            match s.node(&node_id) {
-                Some(node) => WsResponse::Queue {
-                    tracks: node.queue.clone(),
-                    current_index: node.current_index,
-                },
-                None => WsResponse::Queue {
-                    tracks: vec![],
-                    current_index: None,
-                },
+            WsResponse::Queue {
+                tracks: s.queue.clone(),
+                current_index: s.current_index,
             }
         }
     }

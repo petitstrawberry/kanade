@@ -133,18 +133,18 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', node_id: ws.getNodeId(), track });
+    ws.sendCommand({ cmd: 'add_to_queue', track });
     showToast(`Added: ${track.title || 'Track'}`);
   }
 
   function playNow(track: Track, tracks: Track[], index: number) {
-    ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks, index });
+    ws.sendCommand({ cmd: 'replace_and_play', tracks, index });
   }
 
   function addAlbumTracksToQueue(albumId: string) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: albumId }).then(res => {
       if ('tracks' in res) {
-        ws.sendCommand({ cmd: 'add_tracks_to_queue', node_id: ws.getNodeId(), tracks: res.tracks });
+        ws.sendCommand({ cmd: 'add_tracks_to_queue', tracks: res.tracks });
         showToast(`Added ${res.tracks.length} tracks`);
       }
     }).catch(() => {});
@@ -153,18 +153,18 @@
   function playAlbumFromGrid(album: Album) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: album.id }).then(res => {
       if ('tracks' in res && res.tracks.length > 0) {
-        ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks: res.tracks, index: 0 });
+        ws.sendCommand({ cmd: 'replace_and_play', tracks: res.tracks, index: 0 });
       }
     }).catch(() => {});
   }
 
   function addAlbumToQueue() {
-    ws.sendCommand({ cmd: 'add_tracks_to_queue', node_id: ws.getNodeId(), tracks: currentTracks });
+    ws.sendCommand({ cmd: 'add_tracks_to_queue', tracks: currentTracks });
     showToast(`Added ${currentTracks.length} tracks`);
   }
 
   function playAlbumNow() {
-    ws.sendCommand({ cmd: 'replace_and_play', node_id: ws.getNodeId(), tracks: currentTracks, index: 0 });
+    ws.sendCommand({ cmd: 'replace_and_play', tracks: currentTracks, index: 0 });
   }
 </script>
 
