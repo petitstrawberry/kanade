@@ -8,7 +8,8 @@ unified playback API that multiple frontends can consume simultaneously.
 Output nodes connect to the server over the [Kanade Protocol](protocols.md)
 and drive local audio backends (MPD, etc.). Clients control playback via
 WebSocket (JSON), OpenHome (UPnP/SOAP), or a built-in TUI — all driven by a
-single shared state.
+single shared state. All WebSocket connections (clients and nodes) use a
+single port (`:8080`).
 
 ## Features
 
@@ -130,7 +131,7 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 | `kanade-scanner`           | Library scanner (lofty + dsf-meta)                |
 | `kanade-node-protocol`     | Shared Kanade Protocol message types              |
 | `kanade-adapter-mpd`       | MPD audio backend (used by `kanade-node`)         |
-| `kanade-adapter-node-server`| Server-side node connection handler              |
+| `kanade-adapter-node-server`| Server-side node handler (merged into kanade-adapter-ws) |
 | `kanade-adapter-ws`        | WebSocket client API + state broadcast            |
 | `kanade-adapter-openhome`  | OpenHome/UPnP SOAP adapter                       |
 | `kanade-server-http`       | HTTP media file serving                           |

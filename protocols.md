@@ -1,14 +1,14 @@
 # Kanade Protocol
 
-The Kanade Protocol is the native protocol family for Kanade server communication. It comprises WebSocket-based subprotocols for nodes and clients, plus an HTTP surface for media delivery.
+The Kanade Protocol is the native protocol family for Kanade server communication. It comprises a single WebSocket endpoint serving both nodes and clients, plus an HTTP surface for media delivery.
 
 External protocols like OpenHome/UPnP are documented separately.
 
 ## Table of Contents
 
 - [Kanade Protocol](#kanade-protocol)
-  - [1. Node Subprotocol](#1-node-subprotocol) — Server ↔ Output Nodes
-  - [2. Client Subprotocol](#2-client-subprotocol) — Server ↔ Clients
+  - [1. Node Protocol](#1-node-protocol) — Server ↔ Output Nodes
+  - [2. Client Protocol](#2-client-protocol) — Server ↔ Clients
   - [3. Media Surface](#3-media-surface) — HTTP file delivery
 - [External Protocols](#external-protocols)
   - [OpenHome / UPnP](#openhome--upnp) — Control Points → Server
@@ -16,18 +16,20 @@ External protocols like OpenHome/UPnP are documented separately.
 
 ---
 
-## 1. Node Subprotocol
+## 1. Node Protocol
 
 WebSocket JSON protocol between the Kanade server and output nodes.
 Defined in [`kanade-node-protocol`](../kanade-node-protocol/src/lib.rs).
 
-**Server endpoint**: `NODE_ADDR` (default `ws://HOST:8082`)
+**Server endpoint**: `WS_ADDR` (default `ws://HOST:8080`, shared with clients)
+
+The server identifies a connection as a node by the first message: if it parses as `NodeRegistration`, the connection enters node mode.
 
 ### 1.1 Connection Lifecycle
 
 ```
   Node                                    Server
-    │─── WebSocket connect ────────────────→│
+    │─── WebSocket connect ────────────────→│  (:8080)
     │                                       │
     │─── NodeRegistration ─────────────────→│  (node sends its name)
     │←── NodeRegistrationAck ──────────────│  (server assigns node_id + media_base_url)
@@ -110,18 +112,22 @@ Periodic state update from the node's audio backend.
 
 ---
 
-## 2. Client Subprotocol
+## 2. Client Protocol
 
 WebSocket JSON protocol for clients (web, TUI, custom). Defined in
 [`kanade-adapter-ws/command.rs`](../kanade-adapter-ws/src/command.rs).
 
-**Server endpoint**: `WS_ADDR` (default `ws://HOST:8080`)
+**Server endpoint**: `WS_ADDR` (default `ws://HOST:8080`, shared with nodes)
+
+The server identifies a connection as a client by the first message: if it parses as a `WsCommand` (has `"cmd"` tag) or `WsRequest` (has `"req_id"`), the connection enters client mode.
 
 ### 2.1 Connection Lifecycle
 
 ```
   Client                                   Server
-    │─── WebSocket connect ────────────────→│
+    │─── WebSocket connect ────────────────→│  (:8080)
+    │                                       │
+    │←── State snapshot ───────────────────│  (full state pushed immediately)
     │                                       │
     │─── Command / Request ────────────────→│
     │←── State broadcast ──────────────────│  (pushed on every state change)
@@ -141,29 +147,30 @@ Two top-level message shapes (discriminated by the presence of `cmd` vs `req_id`
 Tagged with `"cmd"`. No response is sent.
 
 ```json
-{ "cmd": "play", "node_id": "default" }
-{ "cmd": "replace_and_play", "node_id": "default", "tracks": [{ "id": "...", "title": "...", ... }], "index": 0 }
-{ "cmd": "add_to_queue", "node_id": "default", "track": { "id": "...", ... } }
+{ "cmd": "play" }
+{ "cmd": "replace_and_play", "tracks": [{ "id": "...", "title": "...", ... }], "index": 0 }
+{ "cmd": "add_to_queue", "track": { "id": "...", ... } }
 ```
 
 | cmd                  | Additional Fields                    | Description           |
 | -------------------- | ------------------------------------ | --------------------- |
-| `play`               | `node_id`                            | Start/resume playback |
-| `pause`              | `node_id`                            | Pause playback        |
-| `stop`               | `node_id`                            | Stop playback         |
-| `next`               | `node_id`                            | Next track            |
-| `previous`           | `node_id`                            | Previous track        |
-| `seek`               | `node_id`, `position_secs: f64`      | Seek to position      |
-| `set_volume`         | `node_id`, `volume: u8`              | Set volume (0–100)    |
-| `set_repeat`         | `node_id`, `repeat: RepeatMode`      | Set repeat mode       |
-| `set_shuffle`        | `node_id`, `shuffle: bool`           | Toggle shuffle        |
-| `add_to_queue`       | `node_id`, `track: Track`           | Add single track      |
-| `add_tracks_to_queue`| `node_id`, `tracks: [Track]`        | Add multiple tracks   |
-| `play_index`         | `node_id`, `index: usize`           | Play track at index   |
-| `replace_and_play`   | `node_id`, `tracks: [Track]`, `index: usize` | Replace queue and play from index |
-| `remove_from_queue`  | `node_id`, `index: usize`           | Remove track at index |
-| `move_in_queue`      | `node_id`, `from: usize`, `to: usize` | Reorder track       |
-| `clear_queue`        | `node_id`                            | Clear entire queue    |
+| `play`               | —                                    | Start/resume playback |
+| `pause`              | —                                    | Pause playback        |
+| `stop`               | —                                    | Stop playback         |
+| `next`               | —                                    | Next track            |
+| `previous`           | —                                    | Previous track        |
+| `seek`               | `position_secs: f64`                  | Seek to position      |
+| `set_volume`         | `volume: u8`                          | Set volume (0–100)    |
+| `set_repeat`         | `repeat: RepeatMode`                  | Set repeat mode       |
+| `set_shuffle`        | `shuffle: bool`                       | Toggle shuffle        |
+| `select_node`        | `node_id: string`                     | Select output node    |
+| `add_to_queue`       | `track: Track`                        | Add single track      |
+| `add_tracks_to_queue`| `tracks: [Track]`                     | Add multiple tracks   |
+| `play_index`         | `index: usize`                        | Play track at index   |
+| `replace_and_play`   | `tracks: [Track]`, `index: usize`     | Replace queue and play from index |
+| `remove_from_queue`  | `index: usize`                        | Remove track at index |
+| `move_in_queue`      | `from: usize`, `to: usize`           | Reorder track       |
+| `clear_queue`        | —                                    | Clear entire queue    |
 
 #### Requests (require response)
 
@@ -173,7 +180,7 @@ Tagged with `"req"` and `"req_id"`. The server replies with a matching `req_id`.
 { "req_id": 1, "req": "get_albums" }
 { "req_id": 2, "req": "get_album_tracks", "album_id": "abc123" }
 { "req_id": 3, "req": "search", "query": "Neru" }
-{ "req_id": 4, "req": "get_queue", "node_id": "default" }
+{ "req_id": 4, "req": "get_queue" }
 ```
 
 | req                 | Additional Fields      | Response type     |
@@ -187,7 +194,7 @@ Tagged with `"req"` and `"req_id"`. The server replies with a matching `req_id`.
 | `get_genre_albums`  | `genre`                | `genre_albums`    |
 | `get_genre_tracks`  | `genre`                | `genre_tracks`    |
 | `search`            | `query`                | `search_results`  |
-| `get_queue`         | `node_id`              | `queue`           |
+| `get_queue`         | —                      | `queue`           |
 
 ### 2.3 Server → Client Messages
 
@@ -201,20 +208,12 @@ Pushed to **all** connected clients on every state change.
 {
   "type": "state",
   "state": {
-    "nodes": [
-      {
-        "id": "default",
-        "name": "node",
-        "output_ids": ["default"],
-        "queue": [ { "id": "...", "title": "...", "artist": "...", ... } ],
-        "current_index": 0,
-        "status": "playing",
-        "position_secs": 72.5,
-        "volume": 75,
-        "shuffle": false,
-        "repeat": "all"
-      }
-    ]
+    "nodes": [...],
+    "selected_node_id": "browser-desktop-abc123",
+    "queue": [ { "id": "...", "title": "...", "artist": "...", ... } ],
+    "current_index": 0,
+    "shuffle": false,
+    "repeat": "all"
   }
 }
 ```
@@ -430,14 +429,10 @@ Fields with `null` values are omitted from JSON (`skip_serializing_if = "Option:
 {
   "id": "default",
   "name": "Living Room",
-  "output_ids": ["default"],
-  "queue": [ { "id": "...", ... } ],
-  "current_index": 0,
+  "connected": true,
   "status": "playing",
   "position_secs": 72.5,
-  "volume": 75,
-  "shuffle": false,
-  "repeat": "all"
+  "volume": 75
 }
 ```
 
