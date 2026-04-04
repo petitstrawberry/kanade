@@ -6,6 +6,13 @@ export interface PlayerState {
   projectionGeneration: number;
 }
 
+export interface TrackMetadata {
+  title: string;
+  artist: string;
+  album: string;
+  artworkUrl: string | null;
+}
+
 export type StateChangeCallback = (state: PlayerState) => void;
 
 export class AudioPlayer {
@@ -95,6 +102,14 @@ export class AudioPlayer {
     this.audio.addEventListener('waiting', this.handleWaiting);
     this.audio.addEventListener('canplay', this.handleCanPlay);
     this.audio.addEventListener('error', this.handleError);
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.setActionHandler('play', () => this.play());
+      navigator.mediaSession.setActionHandler('pause', () => this.pause());
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (details.seekTime != null) this.seek(details.seekTime);
+      });
+    }
   }
 
   async primePlayback(): Promise<void> {
@@ -244,6 +259,23 @@ export class AudioPlayer {
       ...this.state,
       positionSecs: this.audio.currentTime,
     };
+  }
+
+  updateMetadata(meta: TrackMetadata | null): void {
+    if (!('mediaSession' in navigator)) return;
+    if (!meta) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    const artwork = meta.artworkUrl
+      ? [{ src: meta.artworkUrl, sizes: '512x512', type: 'image/jpeg' }]
+      : [];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta.title || 'Unknown',
+      artist: meta.artist || 'Unknown Artist',
+      album: meta.album || '',
+      artwork,
+    });
   }
 
   destroy(): void {

@@ -24,8 +24,13 @@ function getBrowserNode(): BrowserNode {
     const nodeName = `Browser (${navigator.userAgent.includes('iPhone') ? 'iPhone' : navigator.userAgent.includes('iPad') ? 'iPad' : 'Desktop'})`;
     node.connect(nodeWsUrl, nodeName);
     g.__kanadeBrowserNode = node;
+    g.__kanadePlayer = player;
   }
   return g.__kanadeBrowserNode as BrowserNode;
+}
+
+export function getPlayer(): AudioPlayer {
+  return (g.__kanadePlayer as AudioPlayer) || null;
 }
 
 export const browserNode = getBrowserNode();
