@@ -143,4 +143,5 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE) for details.
+
