@@ -221,7 +221,7 @@
     z-index: 20;
     justify-content: space-around;
     padding: 8px 0;
-    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    padding-bottom: 12px;
   }
 
   .bottom-tab-bar button {
