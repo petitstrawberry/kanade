@@ -208,7 +208,14 @@ export class BrowserNode {
     const existing = window.sessionStorage.getItem(BROWSER_SESSION_NODE_ID_KEY);
     if (existing) return existing;
 
-    const generated = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'browser'}-${crypto.randomUUID()}`;
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'browser';
+    const uuid = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+        });
+    const generated = `${slug}-${uuid}`;
     window.sessionStorage.setItem(BROWSER_SESSION_NODE_ID_KEY, generated);
     return generated;
   }

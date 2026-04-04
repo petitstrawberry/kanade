@@ -162,6 +162,15 @@ async fn main() -> Result<()> {
         oh_addr,
     );
 
+    let core_for_cleanup = Arc::clone(&core);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            core_for_cleanup.cleanup_disconnected_nodes(Duration::from_secs(30)).await;
+        }
+    });
+
     tokio::select! {
         _ = node_server.run() => {}
         _ = ws_server.run() => {}

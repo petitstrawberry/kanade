@@ -133,7 +133,7 @@
           </button>
           {#if showNodePicker}
             <div class="node-menu">
-              {#each ws.nodes as n (n.id)}
+              {#each ws.nodes.filter(n => n.connected) as n (n.id)}
                 <button class="node-option" class:active={n.id === node?.id} onclick={() => { 
                   ws.sendCommand({ cmd: 'select_node', node_id: n.id });
                   showNodePicker = false; 

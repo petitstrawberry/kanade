@@ -107,6 +107,7 @@
     grid-template-columns: 200px 1fr;
     grid-template-rows: 1fr 120px;
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
   }
 
@@ -273,6 +274,12 @@
 
     .toast-container {
       bottom: 150px;
+    }
+
+    @media (display-mode: standalone) {
+      .app-layout {
+        padding-top: env(safe-area-inset-top);
+      }
     }
   }
 

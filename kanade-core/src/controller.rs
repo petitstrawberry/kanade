@@ -259,6 +259,20 @@ impl Core {
         self.broadcast().await;
     }
 
+    pub async fn cleanup_disconnected_nodes(&self, _max_age: std::time::Duration) {
+        let expired: Vec<String> = {
+            let s = self.state.read().await;
+            s.nodes.iter()
+                .filter(|n| !n.connected)
+                .map(|n| n.id.clone())
+                .collect()
+        };
+        for id in expired {
+            info!(node_id = %id, "cleanup: removing disconnected node");
+            self.remove_node(&id).await;
+        }
+    }
+
     pub async fn select_node(&self, node_id: &str) -> Result<(), CoreError> {
         let mut s = self.state.write().await;
         if s.node(node_id).is_none() {

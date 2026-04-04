@@ -1,0 +1,4 @@
+[2m2026-04-03T11:45:59.056251Z[0m [32m INFO[0m [2mkanade_tui[0m[2m:[0m kanade-tui starting … connecting to ws://127.0.0.1:8080
+[2m2026-04-03T11:45:59.056340Z[0m [32m INFO[0m [2mkanade_tui::ws[0m[2m:[0m Connecting to Kanade server at ws://127.0.0.1:8080 …
+[2m2026-04-03T11:45:59.057498Z[0m [32m INFO[0m [2mkanade_tui::ws[0m[2m:[0m Connected to Kanade server
+[2m2026-04-03T12:50:30.373035Z[0m [32m INFO[0m [2mkanade_tui[0m[2m:[0m kanade-tui shutting down.

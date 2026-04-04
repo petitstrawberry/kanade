@@ -3,6 +3,9 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { resolve } from 'path';
 
 export default defineConfig({
+  server: {
+    host: true,
+  },
   plugins: [svelte()],
   publicDir: 'static',
   resolve: {

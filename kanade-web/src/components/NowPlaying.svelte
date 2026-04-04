@@ -521,6 +521,16 @@
       gap: 24px;
     }
 
+    @media (display-mode: standalone) {
+      .close-btn {
+        top: calc(env(safe-area-inset-top) + 16px);
+      }
+
+      .info-wrapper {
+        padding-top: env(safe-area-inset-top);
+      }
+    }
+
     .cover-art {
       width: min(340px, 72vw);
       height: min(340px, 72vw);

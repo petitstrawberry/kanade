@@ -3,8 +3,9 @@ import { AudioPlayer } from './audio-player';
 import { BrowserNode } from './browser-node';
 
 const params = new URLSearchParams(window.location.search);
-const wsUrl = params.get('server') || 'ws://127.0.0.1:8080';
-export const mediaBase = params.get('media') || 'http://127.0.0.1:8081';
+const host = location.hostname;
+const wsUrl = params.get('server') || `ws://${host}:8080`;
+export const mediaBase = params.get('media') || `http://${host}:8081`;
 
 export const ws = new WsClient(wsUrl);
 

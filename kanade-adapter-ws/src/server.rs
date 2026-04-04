@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use kanade_db::Database;
@@ -92,8 +92,16 @@ async fn handle_connection(
         }
     }
 
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+    ping_interval.tick().await;
+
     loop {
         tokio::select! {
+            _ = ping_interval.tick() => {
+                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {

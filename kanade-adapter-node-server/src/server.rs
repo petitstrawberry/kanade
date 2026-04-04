@@ -153,8 +153,16 @@ async fn handle_node_connection(
         }
     }
 
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    ping_interval.tick().await;
+
     loop {
         tokio::select! {
+            _ = ping_interval.tick() => {
+                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                    break;
+                }
+            }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(cmd) => {
