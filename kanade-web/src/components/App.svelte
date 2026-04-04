@@ -105,7 +105,7 @@
   .app-layout {
     display: grid;
     grid-template-columns: 200px 1fr;
-    grid-template-rows: 1fr 80px;
+    grid-template-rows: 1fr 120px;
     height: 100vh;
     width: 100vw;
   }
