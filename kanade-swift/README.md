@@ -14,7 +14,7 @@ Minimal native client scaffold for Kanade using Swift and SwiftUI.
 
 ## Opening in Xcode
 
-1. Open `/home/runner/work/kanade/kanade/kanade-swift/Package.swift` in Xcode.
+1. Open `kanade-swift/Package.swift` in Xcode.
 2. Select the `KanadeNativeApp` scheme.
 3. Run on macOS or an iOS simulator/device.
 
@@ -23,6 +23,6 @@ Minimal native client scaffold for Kanade using Swift and SwiftUI.
 The shared protocol layer is covered by focused Swift tests:
 
 ```sh
-cd /home/runner/work/kanade/kanade/kanade-swift
+cd kanade-swift
 swift test
 ```
