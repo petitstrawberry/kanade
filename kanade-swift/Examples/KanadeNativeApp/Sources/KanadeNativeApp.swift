@@ -44,15 +44,7 @@ final class KanadeAppModel {
 
     var currentTrackSubtitle: String {
         if let currentTrack = playbackState.currentTrack {
-            if let artist = currentTrack.artist {
-                return artist
-            }
-
-            if let albumTitle = currentTrack.albumTitle {
-                return albumTitle
-            }
-
-            return Self.playbackPrompt
+            return currentTrack.artist ?? currentTrack.albumTitle ?? Self.playbackPrompt
         }
 
         return Self.playbackPrompt
@@ -377,8 +369,8 @@ struct ContentView: View {
                 .font(.title2.weight(.semibold))
 
             LazyVStack(spacing: 10) {
-                ForEach(Array(model.albumTracks.enumerated()), id: \.element.id) { index, track in
-                    trackRow(track, number: index + 1)
+                ForEach(model.albumTracks, id: \.id) { track in
+                    trackRow(track, number: trackNumber(for: track))
                 }
             }
         }
@@ -424,6 +416,10 @@ struct ContentView: View {
         .onTapGesture {
             model.playTrack(track)
         }
+    }
+
+    private func trackNumber(for track: Track) -> Int {
+        (model.albumTracks.firstIndex(of: track) ?? 0) + 1
     }
 
     private func playerButton(systemImage: String, action: @escaping () -> Void, prominent: Bool = false) -> some View {
