@@ -1,5 +1,9 @@
 import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node, Track, RepeatMode } from './types';
 
+function emitWsToast(message: string) {
+  window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
+}
+
 export class WsClient {
   private ws: WebSocket | null = null;
   private url: string;
@@ -7,8 +11,12 @@ export class WsClient {
   private pendingRequests = new Map<number, { resolve: (val: any) => void, reject: (err: any) => void }>();
   private sendQueue: string[] = [];
   private reconnectTimeout: number | null = null;
-  private maxRetries = 10;
+  private connectTimeout: number | null = null;
+  private heartbeatTimeout: number | null = null;
   private retryCount = 0;
+  private active = false;
+  private readonly connectTimeoutMs = 5000;
+  private readonly heartbeatTimeoutMs = 45000;
 
   nodes = $state<Node[]>([]);
   selectedNodeId = $state<string | null>(null);
@@ -18,29 +26,67 @@ export class WsClient {
   repeat = $state<RepeatMode>('off');
   connected = $state(false);
 
+  private visibilityHandler = () => {
+    if (document.visibilityState === 'visible' && !this.connected && this.active) {
+      console.log('WS: visibility restored, reconnecting');
+      this.retryCount = 0;
+      this.clearReconnectTimeout();
+      this.connect();
+    }
+  };
+
+  private onlineHandler = () => {
+      if (this.active) this.scheduleReconnect();
+  };
+
+  private offlineHandler = () => {
+    console.log('WS: network offline');
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.close();
+      this.ws = null;
+    }
+  };
+
   getNodeId(): string | null {
     return this.selectedNodeId;
   }
 
   constructor(url: string) {
     this.url = url;
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+    window.addEventListener('online', this.onlineHandler);
+    window.addEventListener('offline', this.offlineHandler);
+  }
+
+  setFallbackUrl(url: string) {
+    this.fallbackUrl = url;
   }
 
   connect() {
-    if (this.ws?.readyState === WebSocket.OPEN) return;
-    
-    this.ws = new WebSocket(this.url);
+    this.active = true;
+    this.clearReconnectTimeout();
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
 
-    this.ws.onopen = () => {
-      this.connected = true;
-      this.retryCount = 0;
+    emitWsToast('Connecting to server…');
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
+
+    ws.onopen = () => {
+      if (this.ws !== ws) return;
+      this.clearConnectTimeout();
       while (this.sendQueue.length > 0) {
         const msg = this.sendQueue.shift()!;
-        this.ws!.send(msg);
+        ws.send(msg);
       }
+      this.connected = true;
+      this.retryCount = 0;
+      this.resetHeartbeat();
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
+      this.resetHeartbeat();
       try {
         const msg: ServerMessage = JSON.parse(event.data);
         if (msg.type === 'state') {
@@ -63,24 +109,56 @@ export class WsClient {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.clearConnectTimeout();
+      this.clearHeartbeat();
+      this.ws = null;
       this.connected = false;
-      this.scheduleReconnect();
+      this.sendQueue.length = 0;
+      if (this.pendingRequests.size > 0) {
+        const error = new Error('Disconnected');
+        for (const [id, req] of this.pendingRequests.entries()) {
+          req.reject(error);
+          this.pendingRequests.delete(id);
+        }
+      }
+      if (this.active) this.scheduleReconnect();
     };
 
-    this.ws.onerror = (err) => {
+    ws.onopen = () => {
+      if (this.ws !== ws) return;
+      this.clearConnectTimeout();
+      while (this.sendQueue.length > 0) {
+        const msg = this.sendQueue.shift()!;
+        ws.send(msg);
+      }
+      this.connected = true;
+      this.retryCount = 0;
+      this.resetHeartbeat();
+    };
+
+    ws.onerror = (err) => {
+      if (this.ws !== ws) return;
+      this.clearConnectTimeout();
       console.error('WS Error:', err);
     };
+
+    this.clearConnectTimeout();
+    this.connectTimeout = window.setTimeout(() => {
+      if (this.ws === ws && ws.readyState === WebSocket.CONNECTING) {
+        emitWsToast('Server connection timed out. Retrying…');
+        console.warn('WS connect timeout');
+        ws.close();
+      }
+    }, this.connectTimeoutMs);
   }
 
   private scheduleReconnect() {
+    if (!this.active) return;
     if (this.reconnectTimeout) return;
-    if (this.retryCount >= this.maxRetries) {
-      console.error('WS Max retries reached');
-      return;
-    }
-    
-    const delay = Math.min(1000 * Math.pow(2, this.retryCount), 30000);
+
+    const delay = this.retryCount === 0 ? 3000 : Math.min(1000 * Math.pow(2, this.retryCount), 5000);
     this.retryCount++;
     console.log(`Reconnecting in ${delay}ms...`);
     
@@ -88,6 +166,74 @@ export class WsClient {
       this.reconnectTimeout = null;
       this.connect();
     }, delay);
+  }
+
+  private clearReconnectTimeout() {
+    if (this.reconnectTimeout !== null) {
+      window.clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+  }
+
+  disconnect() {
+    this.active = false;
+    this.connected = false;
+    this.retryCount = 0;
+    this.clearConnectTimeout();
+    this.clearReconnectTimeout();
+    this.clearHeartbeat();
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.close();
+      this.ws = null;
+    }
+
+    if (this.pendingRequests.size > 0) {
+      const error = new Error('Disconnected');
+      for (const [id, req] of this.pendingRequests.entries()) {
+        req.reject(error);
+        this.pendingRequests.delete(id);
+      }
+    }
+  }
+
+  private clearConnectTimeout() {
+    if (this.connectTimeout !== null) {
+      window.clearTimeout(this.connectTimeout);
+      this.connectTimeout = null;
+    }
+  }
+
+  private resetHeartbeat() {
+    this.clearHeartbeat();
+    this.heartbeatTimeout = window.setTimeout(() => {
+      console.warn('WS heartbeat timeout — no message received');
+      if (this.ws) {
+        this.ws.onclose = null;
+        this.ws.close();
+        this.ws = null;
+      }
+      this.connected = false;
+      this.sendQueue.length = 0;
+      if (this.pendingRequests.size > 0) {
+        const error = new Error('Heartbeat timeout');
+        for (const [id, req] of this.pendingRequests.entries()) {
+          req.reject(error);
+          this.pendingRequests.delete(id);
+        }
+      }
+      if (this.active) this.scheduleReconnect();
+    }, this.heartbeatTimeoutMs);
+  }
+
+  private clearHeartbeat() {
+    if (this.heartbeatTimeout !== null) {
+      window.clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
   }
 
   private sendRaw(json: string) {

@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 
 use futures_util::{SinkExt, StreamExt};
 use kanade_db::Database;
@@ -94,17 +94,28 @@ async fn handle_connection(
 
     let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
     ping_interval.tick().await;
+    let mut last_seen = Instant::now();
 
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
-                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                if last_seen.elapsed() > Duration::from_secs(90) {
+                    warn!("WS client heartbeat timed out: {peer}");
                     break;
+                }
+                match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Ping(vec![]))).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        warn!("WS ping send timed out for {peer}");
+                        break;
+                    }
                 }
             }
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        last_seen = Instant::now();
                         match serde_json::from_str::<ClientMessage>(&text) {
                             Ok(ClientMessage::Command(cmd)) => {
                                 dispatch_command(cmd, &core).await;
@@ -126,7 +137,20 @@ async fn handle_connection(
                         info!("WebSocket client disconnected: {peer}");
                         break;
                     }
-                    Some(Ok(_)) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        last_seen = Instant::now();
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        last_seen = Instant::now();
+                        match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Pong(payload))).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => break,
+                        }
+                    }
+                    Some(Ok(_)) => {
+                        last_seen = Instant::now();
+                    }
                     Some(Err(e)) => {
                         warn!("WS error from {peer}: {e}");
                         break;

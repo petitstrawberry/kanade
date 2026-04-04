@@ -43,6 +43,7 @@ use kanade_core::{
 };
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
@@ -85,7 +86,7 @@ impl EventBroadcaster for NodeEventBroadcaster {
             };
             if let Ok(json) = serde_json::to_string(&update) {
                 let tx = self.tx.lock().await;
-                let _ = tx.send(json).await;
+                let _ = tx.try_send(json);
             }
         }
     }
@@ -284,6 +285,16 @@ async fn run_session(
                                 Err(e) => warn!("Unexpected message from server: {e}"),
                             }
                         }
+                        Some(Ok(Message::Ping(payload))) => {
+                            match timeout(Duration::from_secs(5), ws_tx.send(Message::Pong(payload))).await {
+                                Ok(Ok(())) => {}
+                                _ => {
+                                    error!("Failed to reply to server ping");
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Pong(_))) => {}
                         Some(Ok(Message::Close(_))) | None => {
                             info!("Server disconnected");
                             return Ok(());
@@ -296,9 +307,12 @@ async fn run_session(
                     }
                 }
                 Some(json) = state_rx.recv() => {
-                    if ws_tx.send(Message::Text(json)).await.is_err() {
-                        error!("Failed to send state update");
-                        return Ok(());
+                    match timeout(Duration::from_secs(5), ws_tx.send(Message::Text(json))).await {
+                        Ok(Ok(())) => {}
+                        _ => {
+                            error!("Failed to send state update");
+                            return Ok(());
+                        }
                     }
                 }
             }

@@ -145,11 +145,18 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
+    let ws_fallback_addr = SocketAddr::new(ws_addr.ip(), ws_addr.port() + 3);
     let ws_server = WsServer::new(
         Arc::clone(&core),
         PathBuf::from(&db_path),
         Arc::clone(&ws_broadcaster),
         ws_addr,
+    );
+    let ws_server_fallback = WsServer::new(
+        Arc::clone(&core),
+        PathBuf::from(&db_path),
+        Arc::clone(&ws_broadcaster),
+        ws_fallback_addr,
     );
 
     let oh_addr: SocketAddr = std::env::var("OH_ADDR")
@@ -174,6 +181,7 @@ async fn main() -> Result<()> {
     tokio::select! {
         _ = node_server.run() => {}
         _ = ws_server.run() => {}
+        _ = ws_server_fallback.run() => {}
         _ = oh_server.run() => {}
     }
 

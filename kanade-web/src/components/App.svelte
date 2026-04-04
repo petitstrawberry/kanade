@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { ws, ActiveTab, toasts } from '../lib/stores';
+  import { ws, browserNode, connectBrowserNode, ActiveTab, toasts, showToast } from '../lib/stores';
   import TransportBar from './TransportBar.svelte';
   import NowPlaying from './NowPlaying.svelte';
   import Library from './Library.svelte';
@@ -15,6 +15,12 @@
 
   onMount(() => {
     ws.connect();
+    connectBrowserNode();
+
+    const onWsToast = (e: Event) => {
+      const message = (e as CustomEvent<{ message?: string }>).detail?.message;
+      if (message) showToast(message);
+    };
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -42,8 +48,12 @@
       else if (e.key === 'Escape' && showNowPlaying) showNowPlaying = false;
     };
 
+    window.addEventListener('kanade-ws-toast', onWsToast);
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('kanade-ws-toast', onWsToast);
+      window.removeEventListener('keydown', onKeyDown);
+    };
   });
 </script>
 

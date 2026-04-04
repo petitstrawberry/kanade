@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use kanade_core::{
@@ -13,6 +13,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::output::RemoteNodeOutput;
+
+const RECONNECT_GRACE_MS: u64 = 5000;
 
 pub struct NodeServer {
     core: Arc<Core>,
@@ -79,20 +81,29 @@ async fn handle_node_connection(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    let registration: NodeRegistration = loop {
-        match ws_rx.next().await {
-            Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                Ok(reg) => break reg,
-                Err(e) => {
-                    warn!("Node {peer}: malformed registration message: {e}");
-                    return;
+    let registration: NodeRegistration = match tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match ws_rx.next().await {
+                Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
+                    Ok(reg) => break reg,
+                    Err(e) => {
+                        warn!("Node {peer}: malformed registration message: {e}");
+                        return None;
+                    }
+                },
+                Some(Ok(Message::Close(_))) | None => {
+                    info!("Node {peer}: disconnected before registering");
+                    return None;
                 }
-            },
-            Some(Ok(Message::Close(_))) | None => {
-                info!("Node {peer}: disconnected before registering");
-                return;
+                _ => continue,
             }
-            _ => continue,
+        }
+    }).await {
+        Ok(Some(registration)) => registration,
+        Ok(None) => return,
+        Err(_) => {
+            warn!("Node {peer}: registration timed out");
+            return;
         }
     };
 
@@ -111,10 +122,19 @@ async fn handle_node_connection(
 
     info!("Output node registered: {node_id}");
 
+    let ack = NodeRegistrationAck {
+        node_id: node_id.clone(),
+        media_base_url,
+    };
+    if ws_tx.send(Message::Text(serde_json::to_string(&ack).expect("ack serializable"))).await.is_err() {
+        return;
+    }
+
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<NodeCommand>(64);
+    let connection_id = Uuid::new_v4().to_string();
     let output: Arc<dyn kanade_core::ports::AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
 
-    core.register_output(node_id.clone(), Arc::clone(&output)).await;
+    core.register_output(node_id.clone(), connection_id.clone(), Arc::clone(&output)).await;
 
     core.add_node(Node {
         id: node_id.clone(),
@@ -126,18 +146,8 @@ async fn handle_node_connection(
     })
     .await;
 
-    if let Err(e) = core.sync_output_to_global(&node_id).await {
-        warn!("Node {peer}: failed to sync output state: {e}");
-    }
-
-    let ack = NodeRegistrationAck {
-        node_id: node_id.clone(),
-        media_base_url,
-    };
-    if ws_tx.send(Message::Text(serde_json::to_string(&ack).expect("ack serializable"))).await.is_err() {
-        core.unregister_output(&node_id).await;
-        core.mark_node_connected(&node_id, false).await;
-        return;
+    if let Err(e) = core.sync_connected_node_to_logical_state(&node_id).await {
+        warn!("Node {peer}: failed to restore logical node state: {e}");
     }
 
     let selected_node_id = {
@@ -155,12 +165,22 @@ async fn handle_node_connection(
 
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     ping_interval.tick().await;
+    let mut last_seen = std::time::Instant::now();
 
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
-                if ws_tx.send(Message::Ping(vec![])).await.is_err() {
+                if last_seen.elapsed() > Duration::from_secs(90) {
+                    warn!("Node {peer}: heartbeat timed out");
                     break;
+                }
+                match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Ping(vec![]))).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        warn!("Node {peer}: ping send timed out");
+                        break;
+                    }
                 }
             }
             cmd = cmd_rx.recv() => {
@@ -174,8 +194,13 @@ async fn handle_node_connection(
                                 continue;
                             }
                         };
-                        if ws_tx.send(Message::Text(json)).await.is_err() {
-                            break;
+                        match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Text(json))).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                warn!("Node {peer}: command send timed out");
+                                break;
+                            }
                         }
                     }
                     None => break,
@@ -184,9 +209,10 @@ async fn handle_node_connection(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        last_seen = std::time::Instant::now();
                         match serde_json::from_str::<NodeStateUpdate>(&text) {
                             Ok(update) => {
-                                if !core.is_same_output(&node_id, &output).await {
+                                if !core.is_same_output(&node_id, &connection_id).await {
                                     warn!("Node {peer}: ignoring stale state update for {node_id}");
                                     continue;
                                 }
@@ -203,8 +229,21 @@ async fn handle_node_connection(
                             Err(e) => warn!("Node {peer}: bad state update: {e}"),
                         }
                     }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_seen = std::time::Instant::now();
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        last_seen = std::time::Instant::now();
+                        match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Pong(payload))).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => break,
+                        }
+                    }
                     Some(Ok(Message::Close(_))) | None => break,
-                    Some(Ok(_)) => {}
+                    Some(Ok(_)) => {
+                        last_seen = std::time::Instant::now();
+                    }
                     Some(Err(e)) => {
                         warn!("Node {peer}: WS error: {e}");
                         break;
@@ -215,8 +254,9 @@ async fn handle_node_connection(
     }
 
     info!("Output node disconnected: {}", node_id);
-    if core.is_same_output(&node_id, &output).await {
-        core.unregister_output(&node_id).await;
-        core.mark_node_connected(&node_id, false).await;
+    tokio::time::sleep(Duration::from_millis(RECONNECT_GRACE_MS)).await;
+    if core.is_same_output(&node_id, &connection_id).await {
+        core.unregister_output(&node_id, &connection_id).await;
+        core.handle_node_disconnected(&node_id).await;
     }
 }

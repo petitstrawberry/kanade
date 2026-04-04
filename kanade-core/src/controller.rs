@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use crate::{
     error::CoreError,
@@ -18,9 +18,15 @@ struct NodeTransportState {
     loaded_len: usize,
 }
 
+#[derive(Clone)]
+struct OutputSlot {
+    connection_id: String,
+    output: Arc<dyn AudioOutput>,
+}
+
 pub struct Core {
     state: Arc<RwLock<PlaybackState>>,
-    outputs: Arc<RwLock<HashMap<String, Arc<dyn AudioOutput>>>>,
+    outputs: Arc<RwLock<HashMap<String, OutputSlot>>>,
     broadcasters: Vec<Arc<dyn EventBroadcaster>>,
     persisters: Vec<Arc<dyn StatePersister>>,
     transport_state: Arc<RwLock<HashMap<String, NodeTransportState>>>,
@@ -40,7 +46,20 @@ impl Core {
                 shuffle: false,
                 repeat: RepeatMode::Off,
             })),
-            outputs: Arc::new(RwLock::new(outputs.into_iter().collect())),
+            outputs: Arc::new(RwLock::new(
+                outputs
+                    .into_iter()
+                    .map(|(id, output)| {
+                        (
+                            id,
+                            OutputSlot {
+                                connection_id: "static".to_string(),
+                                output,
+                            },
+                        )
+                    })
+                    .collect(),
+            )),
             broadcasters,
             persisters: Vec::new(),
             transport_state: Arc::new(RwLock::new(HashMap::new())),
@@ -48,25 +67,42 @@ impl Core {
     }
 
     /// Register a new output at runtime. Safe to call on an `Arc<Core>`.
-    pub async fn register_output(&self, id: String, output: Arc<dyn AudioOutput>) {
-        self.outputs.write().await.insert(id, output);
+    pub async fn register_output(
+        &self,
+        id: String,
+        connection_id: String,
+        output: Arc<dyn AudioOutput>,
+    ) {
+        self.outputs.write().await.insert(
+            id,
+            OutputSlot {
+                connection_id,
+                output,
+            },
+        );
     }
 
     /// Remove a previously registered output. Safe to call on an `Arc<Core>`.
-    pub async fn unregister_output(&self, id: &str) {
-        self.outputs.write().await.remove(id);
+    pub async fn unregister_output(&self, id: &str, connection_id: &str) {
+        let mut outputs = self.outputs.write().await;
+        if outputs
+            .get(id)
+            .is_some_and(|slot| slot.connection_id == connection_id)
+        {
+            outputs.remove(id);
+        }
     }
 
     pub async fn has_output(&self, id: &str) -> bool {
         self.outputs.read().await.contains_key(id)
     }
 
-    pub async fn is_same_output(&self, id: &str, output: &Arc<dyn AudioOutput>) -> bool {
+    pub async fn is_same_output(&self, id: &str, connection_id: &str) -> bool {
         self.outputs
             .read()
             .await
             .get(id)
-            .map_or(false, |o| Arc::ptr_eq(o, output))
+            .is_some_and(|slot| slot.connection_id == connection_id)
     }
 
     pub fn add_broadcaster(&mut self, b: Arc<dyn EventBroadcaster>) {
@@ -92,11 +128,6 @@ impl Core {
         mpd_song_index: Option<usize>,
         projection_generation: u64,
         ) {
-        let is_selected_node = {
-            let s = self.state.read().await;
-            s.selected_node_id.as_deref() == Some(node_id)
-        };
-
         let projected_current_index = {
             let transport = self.transport_state.read().await;
             transport
@@ -118,24 +149,44 @@ impl Core {
         };
 
         let mut s = self.state.write().await;
+        let is_selected_node = s.selected_node_id.as_deref() == Some(node_id);
+        let mut changed = false;
         if let Some(node) = s.node_mut(node_id) {
-            node.volume = volume;
+            if node.volume != volume {
+                node.volume = volume;
+                changed = true;
+            }
 
             if is_selected_node {
-                node.status = status;
-                node.position_secs = position_secs;
+                if node.status != status {
+                    node.status = status;
+                    changed = true;
+                }
+                if (node.position_secs - position_secs).abs() > f64::EPSILON {
+                    node.position_secs = position_secs;
+                    changed = true;
+                }
                 if let Some(next_index) = projected_current_index {
-                    if next_index < s.queue.len() {
+                    if next_index < s.queue.len() && s.current_index != Some(next_index) {
                         s.current_index = Some(next_index);
+                        changed = true;
                     }
                 }
             } else {
-                node.status = PlaybackStatus::Stopped;
-                node.position_secs = 0.0;
+                if node.status != PlaybackStatus::Stopped {
+                    node.status = PlaybackStatus::Stopped;
+                    changed = true;
+                }
+                if node.position_secs != 0.0 {
+                    node.position_secs = 0.0;
+                    changed = true;
+                }
             }
         }
         drop(s);
-        self.broadcast().await;
+        if changed {
+            self.broadcast().await;
+        }
     }
 
     pub fn state_handle(&self) -> Arc<RwLock<PlaybackState>> {
@@ -165,7 +216,7 @@ impl Core {
         } else {
             s.nodes.push(node.clone());
         }
-        if is_first && node.connected {
+        if (is_first || s.selected_node_id.is_none()) && node.connected {
             s.selected_node_id = Some(node.id.clone());
         }
         drop(s);
@@ -185,19 +236,16 @@ impl Core {
         self.broadcast().await;
     }
 
-    pub async fn handle_node_disconnected(&self, node_id: &str) -> Result<(), CoreError> {
-        let (fallback_node_id, resume_on_fallback, resume_position_secs) = {
+    pub async fn handle_node_disconnected(&self, node_id: &str) {
+        let (fallback_node_id, resume_status, resume_position_secs) = {
             let mut s = self.state.write().await;
             let was_selected = s.selected_node_id.as_deref() == Some(node_id);
-            let mut resume_on_fallback = false;
+            let mut resume_status = PlaybackStatus::Stopped;
             let mut resume_position_secs = 0.0;
 
-            if let Some(node) = s.node_mut(node_id) {
-                resume_on_fallback = node.status == PlaybackStatus::Playing;
+            if let Some(node) = s.node(node_id) {
+                resume_status = node.status;
                 resume_position_secs = node.position_secs;
-                node.connected = false;
-                node.status = PlaybackStatus::Stopped;
-                node.position_secs = 0.0;
             }
 
             let fallback_node_id = if was_selected {
@@ -209,41 +257,61 @@ impl Core {
                 None
             };
 
+            if let Some(node) = s.node_mut(node_id) {
+                node.connected = false;
+                if !(was_selected && fallback_node_id.is_none()) {
+                    node.status = PlaybackStatus::Stopped;
+                    node.position_secs = 0.0;
+                }
+            }
+
             if let Some(fallback_node_id) = fallback_node_id.as_ref() {
                 s.selected_node_id = Some(fallback_node_id.clone());
                 for node in s.nodes.iter_mut() {
                     if node.id == *fallback_node_id {
-                        node.status = if resume_on_fallback {
-                            PlaybackStatus::Playing
-                        } else {
-                            PlaybackStatus::Stopped
-                        };
+                        node.status = resume_status;
                         node.position_secs = resume_position_secs;
                     } else if node.id != node_id {
                         node.status = PlaybackStatus::Stopped;
                         node.position_secs = 0.0;
                     }
                 }
+            } else if was_selected {
+                s.selected_node_id = Some(node_id.to_string());
             }
 
-            (fallback_node_id, resume_on_fallback, resume_position_secs)
+            (fallback_node_id, resume_status, resume_position_secs)
         };
 
         if let Some(fallback_node_id) = fallback_node_id {
-            self.sync_output_to_global(&fallback_node_id).await?;
-            if resume_position_secs > 0.0 {
-                for output in self.each_output(&fallback_node_id).await? {
-                    output.seek(resume_position_secs).await?;
-                }
-            }
-            if resume_on_fallback {
-                for output in self.each_output(&fallback_node_id).await? {
-                    output.play().await?;
-                }
+            if let Err(e) = self.sync_connected_node_to_logical_state(&fallback_node_id).await {
+                warn!(fallback_node_id = %fallback_node_id, resume_status = ?resume_status, resume_position_secs, "handle_node_disconnected: failed to restore fallback output: {e}");
             }
         }
 
         self.broadcast().await;
+    }
+
+    pub async fn sync_connected_node_to_logical_state(&self, node_id: &str) -> Result<(), CoreError> {
+        let (is_selected, resume_status, resume_position_secs) = {
+            let s = self.state.read().await;
+            let node = s.node(node_id).ok_or(CoreError::NodeNotFound)?;
+            (
+                s.selected_node_id.as_deref() == Some(node_id),
+                node.status,
+                node.position_secs,
+            )
+        };
+
+        self.sync_output_to_global(node_id).await?;
+
+        if is_selected {
+            self.apply_output_runtime_state(node_id, resume_status, resume_position_secs)
+                .await?;
+        } else {
+            self.stop_node(node_id).await?;
+        }
+
         Ok(())
     }
 
@@ -260,17 +328,7 @@ impl Core {
     }
 
     pub async fn cleanup_disconnected_nodes(&self, _max_age: std::time::Duration) {
-        let expired: Vec<String> = {
-            let s = self.state.read().await;
-            s.nodes.iter()
-                .filter(|n| !n.connected)
-                .map(|n| n.id.clone())
-                .collect()
-        };
-        for id in expired {
-            info!(node_id = %id, "cleanup: removing disconnected node");
-            self.remove_node(&id).await;
-        }
+        let _ = _max_age;
     }
 
     pub async fn select_node(&self, node_id: &str) -> Result<(), CoreError> {
@@ -366,7 +424,7 @@ impl Core {
         let outputs = self.outputs.read().await;
         outputs
             .get(node_id)
-            .map(|o| vec![Arc::clone(o)])
+            .map(|slot| vec![Arc::clone(&slot.output)])
             .ok_or(CoreError::NoActiveOutput)
     }
 
@@ -801,6 +859,40 @@ impl Core {
             o.set_volume(volume).await?;
             info!(node_id = %node_id, queue_len = queue.len(), projection_generation, "sync_output_to_global: set_queue");
             o.set_queue(&queue, projection_generation).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn apply_output_runtime_state(
+        &self,
+        node_id: &str,
+        status: PlaybackStatus,
+        position_secs: f64,
+    ) -> Result<(), CoreError> {
+        match status {
+            PlaybackStatus::Playing | PlaybackStatus::Loading => {
+                for o in self.each_output(node_id).await? {
+                    o.play().await?;
+                    if position_secs > 0.0 {
+                        o.seek(position_secs).await?;
+                    }
+                }
+            }
+            PlaybackStatus::Paused => {
+                for o in self.each_output(node_id).await? {
+                    o.play().await?;
+                    if position_secs > 0.0 {
+                        o.seek(position_secs).await?;
+                    }
+                    o.pause().await?;
+                }
+            }
+            PlaybackStatus::Stopped => {
+                for o in self.each_output(node_id).await? {
+                    o.stop().await?;
+                }
+            }
         }
 
         Ok(())

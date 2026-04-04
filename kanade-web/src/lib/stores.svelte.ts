@@ -3,37 +3,45 @@ import { AudioPlayer } from './audio-player';
 import { BrowserNode } from './browser-node';
 
 const params = new URLSearchParams(window.location.search);
+const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
+const httpScheme = location.protocol === 'https:' ? 'https' : 'http';
 const host = location.hostname;
-const wsUrl = params.get('server') || `ws://${host}:8080`;
-export const mediaBase = params.get('media') || `http://${host}:8081`;
+
+function normalizeUrl(raw: string | null, fallback: string, scheme: string): string {
+  if (!raw) return fallback;
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw)) return raw;
+  return `${scheme}://${raw}`;
+}
+
+const wsUrl = normalizeUrl(params.get('server'), `${wsScheme}://${host}:8080`, wsScheme);
+export const mediaBase = normalizeUrl(params.get('media'), `${httpScheme}://${host}:8081`, httpScheme);
 
 export const ws = new WsClient(wsUrl);
 
-const g = globalThis as Record<string, unknown>;
-
-function getBrowserNode(): BrowserNode {
-  if (!g.__kanadeBrowserNode) {
-    const player = new AudioPlayer(() => {});
-    const node = new BrowserNode(player);
-    const nodeWs = new URL(wsUrl);
-    nodeWs.port = '8082';
-    nodeWs.pathname = '/';
-    nodeWs.search = '';
-    nodeWs.hash = '';
-    const nodeWsUrl = nodeWs.toString();
-    const nodeName = `Browser (${navigator.userAgent.includes('iPhone') ? 'iPhone' : navigator.userAgent.includes('iPad') ? 'iPad' : 'Desktop'})`;
-    node.connect(nodeWsUrl, nodeName);
-    g.__kanadeBrowserNode = node;
-    g.__kanadePlayer = player;
-  }
-  return g.__kanadeBrowserNode as BrowserNode;
-}
-
+const player = new AudioPlayer(() => {});
 export function getPlayer(): AudioPlayer {
-  return (g.__kanadePlayer as AudioPlayer) || null;
+  return player;
 }
 
-export const browserNode = getBrowserNode();
+export const browserNode = new BrowserNode(player);
+
+export function connectBrowserNode(): void {
+  const nodeWs = new URL(wsUrl);
+  nodeWs.port = '8082';
+  nodeWs.pathname = '/';
+  nodeWs.search = '';
+  nodeWs.hash = '';
+  const nodeWsUrl = nodeWs.toString();
+  const nodeName = `Browser (${navigator.userAgent.includes('iPhone') ? 'iPhone' : navigator.userAgent.includes('iPad') ? 'iPad' : 'Desktop'})`;
+  browserNode.connect(nodeWsUrl, nodeName);
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    ws.disconnect();
+    browserNode.disconnect();
+  });
+}
 
 export class ActiveTab {
   value = $state<'library' | 'queue' | 'search'>('library');

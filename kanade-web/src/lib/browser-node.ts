@@ -1,6 +1,10 @@
 import { AudioPlayer } from './audio-player';
 import type { PlayerState } from './audio-player';
 
+function emitWsToast(message: string) {
+  window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
+}
+
 type RegistrationAck = {
   node_id: string;
   media_base_url: string;
@@ -69,61 +73,82 @@ export class BrowserNode {
   private nodeId: string | null = null;
   private mediaBaseUrl: string | null = null;
   private registered = false;
-  private shouldReconnect = false;
+  private active = false;
   private retryCount = 0;
   private reconnectTimeoutId: number | null = null;
+  private connectTimeoutId: number | null = null;
   private registrationTimeoutId: number | null = null;
+  private heartbeatTimeoutId: number | null = null;
   private stateIntervalId: number | null = null;
+  private lastSentStateKey: string | null = null;
 
-  private readonly maxRetries = 5;
   private readonly baseDelayMs = 1000;
-  private readonly maxDelayMs = 15000;
-  private readonly registrationTimeoutMs = 5000;
+  private readonly maxDelayMs = 5000;
+  private readonly connectTimeoutMs = 10000;
+  private readonly registrationTimeoutMs = 10000;
+  private readonly heartbeatTimeoutMs = 45000;
+
+  private visibilityHandler = () => {
+    if (document.visibilityState === 'visible' && !this.registered && this.active) {
+      console.log('BrowserNode: visibility restored, reconnecting');
+      this.retryCount = 0;
+      this.clearReconnectTimeout();
+      this.openSocket();
+    }
+  };
+
+  private onlineHandler = () => {
+    if (this.active) {
+      console.log('BrowserNode: network online, reconnecting');
+      this.retryCount = 0;
+      this.clearReconnectTimeout();
+      this.openSocket();
+    }
+  };
+
+  private offlineHandler = () => {
+    console.log('BrowserNode: network offline');
+    this.closeSocket();
+  };
 
   constructor(player: AudioPlayer) {
     this.player = player;
+    document.addEventListener('visibilitychange', this.visibilityHandler);
+    window.addEventListener('online', this.onlineHandler);
+    window.addEventListener('offline', this.offlineHandler);
   }
 
   connect(wsUrl: string, name: string): void {
+    const nextLogicalNodeId = this.getOrCreateSessionNodeId(name);
+
+    if (
+      this.active &&
+      this.wsUrl === wsUrl &&
+      this.name === name &&
+      this.logicalNodeId === nextLogicalNodeId &&
+      (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
     this.wsUrl = wsUrl;
     this.name = name;
-    this.logicalNodeId = this.getOrCreateSessionNodeId(name);
-    this.shouldReconnect = true;
+    this.logicalNodeId = nextLogicalNodeId;
+    this.active = true;
     this.retryCount = 0;
     this.clearReconnectTimeout();
-    this.clearStateInterval();
-    this.clearRegistrationTimeout();
-
-    if (this.ws) {
-      this.ws.onopen = null;
-      this.ws.onmessage = null;
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    this.resetConnectionState();
+    this.closeSocket();
 
     this.openSocket();
   }
 
   disconnect(): void {
-    this.shouldReconnect = false;
+    this.active = false;
     this.retryCount = 0;
-    this.registered = false;
-    this.nodeId = null;
-    this.mediaBaseUrl = null;
     this.clearReconnectTimeout();
-    this.clearStateInterval();
-    this.clearRegistrationTimeout();
-
-    if (this.ws) {
-      this.ws.onopen = null;
-      this.ws.onmessage = null;
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.close();
-      this.ws = null;
-    }
+    this.resetConnectionState();
+    this.closeSocket();
 
     console.log('BrowserNode disconnected');
   }
@@ -142,8 +167,10 @@ export class BrowserNode {
   }
 
   private openSocket(): void {
-    if (!this.wsUrl || !this.name || !this.shouldReconnect) return;
+    if (!this.wsUrl || !this.name || !this.active) return;
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
 
+    emitWsToast('Connecting browser output…');
     console.log(`BrowserNode connecting: ${this.wsUrl}`);
     const ws = new WebSocket(this.wsUrl);
     this.ws = ws;
@@ -153,8 +180,10 @@ export class BrowserNode {
 
     ws.onopen = () => {
       if (this.ws !== ws) return;
+      this.clearConnectTimeout();
       console.log(`BrowserNode connected: ${this.wsUrl}`);
       this.sendRegistration();
+      this.resetHeartbeat();
       this.clearRegistrationTimeout();
       this.registrationTimeoutId = window.setTimeout(() => {
         if (this.ws !== ws || this.registered) return;
@@ -165,33 +194,39 @@ export class BrowserNode {
 
     ws.onmessage = (event: MessageEvent<string>) => {
       if (this.ws !== ws) return;
+      this.resetHeartbeat();
       this.handleMessage(event.data);
     };
 
     ws.onerror = () => {
       if (this.ws !== ws) return;
       console.warn('BrowserNode WebSocket error');
-      ws.close();
     };
 
     ws.onclose = () => {
       if (this.ws !== ws) return;
-      this.ws = null;
       const wasConnected = this.registered;
-      this.registered = false;
-      this.nodeId = null;
-      this.mediaBaseUrl = null;
-      this.clearRegistrationTimeout();
-      this.clearStateInterval();
+      this.ws = null;
+      this.resetConnectionState();
 
       if (wasConnected) {
         console.log('BrowserNode disconnected from server');
       }
 
-      if (this.shouldReconnect) {
+      if (this.active) {
         this.scheduleReconnect();
       }
     };
+
+    this.clearHeartbeat();
+    this.clearConnectTimeout();
+    this.connectTimeoutId = window.setTimeout(() => {
+      if (this.ws === ws && ws.readyState === WebSocket.CONNECTING) {
+        emitWsToast('Browser output timed out. Retrying…');
+        console.warn('BrowserNode connect timeout');
+        ws.close();
+      }
+    }, this.connectTimeoutMs);
   }
 
   private sendRegistration(): void {
@@ -321,29 +356,26 @@ export class BrowserNode {
     }
 
     try {
-      this.ws.send(
-        JSON.stringify({
-          status: state.status,
-          position_secs: state.positionSecs,
-          volume: state.volume,
-          mpd_song_index: state.currentSongIndex ?? null,
-          projection_generation: state.projectionGeneration,
-        }),
-      );
+      const payload = {
+        status: state.status,
+        position_secs: state.positionSecs,
+        volume: state.volume,
+        mpd_song_index: state.currentSongIndex ?? null,
+        projection_generation: state.projectionGeneration,
+      };
+      const stateKey = JSON.stringify(payload);
+      if (stateKey === this.lastSentStateKey) return;
+      this.lastSentStateKey = stateKey;
+      this.ws.send(stateKey);
     } catch (error) {
       console.warn('BrowserNode failed to send state update', error);
     }
   }
 
   private scheduleReconnect(): void {
-    if (!this.shouldReconnect || this.reconnectTimeoutId !== null) return;
+    if (!this.active || this.reconnectTimeoutId !== null) return;
 
-    if (this.retryCount >= this.maxRetries) {
-      console.warn('BrowserNode max reconnect retries reached');
-      return;
-    }
-
-    const delay = Math.min(this.baseDelayMs * Math.pow(2, this.retryCount), this.maxDelayMs);
+    const delay = this.retryCount === 0 ? 3000 : Math.min(this.baseDelayMs * Math.pow(2, this.retryCount), this.maxDelayMs);
     this.retryCount += 1;
     console.log(`BrowserNode reconnecting in ${delay}ms`);
 
@@ -367,10 +399,61 @@ export class BrowserNode {
     }
   }
 
+  private clearConnectTimeout(): void {
+    if (this.connectTimeoutId !== null) {
+      window.clearTimeout(this.connectTimeoutId);
+      this.connectTimeoutId = null;
+    }
+  }
+
   private clearStateInterval(): void {
     if (this.stateIntervalId !== null) {
       window.clearInterval(this.stateIntervalId);
       this.stateIntervalId = null;
     }
+  }
+
+  private resetHeartbeat(): void {
+    this.clearHeartbeat();
+    this.heartbeatTimeoutId = window.setTimeout(() => {
+      console.warn('BrowserNode heartbeat timeout — no message received');
+      if (this.ws) {
+        this.ws.onclose = null;
+        this.ws.close();
+        this.ws = null;
+      }
+      this.resetConnectionState();
+      if (this.active) {
+        this.scheduleReconnect();
+      }
+    }, this.heartbeatTimeoutMs);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimeoutId !== null) {
+      window.clearTimeout(this.heartbeatTimeoutId);
+      this.heartbeatTimeoutId = null;
+    }
+  }
+
+  private resetConnectionState(): void {
+    this.clearConnectTimeout();
+    this.clearRegistrationTimeout();
+    this.clearHeartbeat();
+    this.clearStateInterval();
+    this.registered = false;
+    this.nodeId = null;
+    this.mediaBaseUrl = null;
+    this.lastSentStateKey = null;
+  }
+
+  private closeSocket(): void {
+    if (!this.ws) return;
+    this.ws.onopen = null;
+    this.ws.onmessage = null;
+    this.ws.onclose = null;
+    this.ws.onerror = null;
+    this.ws.close();
+    this.ws = null;
   }
 }

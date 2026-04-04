@@ -89,7 +89,7 @@
   }
 
   $effect(() => {
-    ws.connected;
+    if (!ws.connected) return;
     mode;
     loadRoot();
   });

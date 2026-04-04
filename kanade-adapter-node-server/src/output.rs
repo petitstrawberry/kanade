@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use kanade_core::{error::CoreError, ports::AudioOutput};
 use kanade_node_protocol::NodeCommand;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, timeout};
 
 /// [`AudioOutput`] implementation that forwards every call to a connected
 /// output node over the kanade protocol.
@@ -19,9 +20,9 @@ impl RemoteNodeOutput {
     }
 
     async fn send(&self, cmd: NodeCommand) -> Result<(), CoreError> {
-        self.tx
-            .send(cmd)
+        timeout(Duration::from_secs(2), self.tx.send(cmd))
             .await
+            .map_err(|_| CoreError::Output("node command send timeout".to_string()))?
             .map_err(|e| CoreError::Output(e.to_string()))
     }
 }
