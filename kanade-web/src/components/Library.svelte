@@ -7,6 +7,10 @@
 
   type Mode = 'albums' | 'artists' | 'genres';
   let mode = $state<Mode>('albums');
+  let sizeIndex = $state(parseInt(localStorage.getItem('kanade-artwork-size-idx') || '1'));
+  const sizePresets = [120, 180, 260, 360];
+  let artworkSize = $derived(sizePresets[sizeIndex]);
+  $effect(() => { localStorage.setItem('kanade-artwork-size-idx', String(sizeIndex)); });
 
   const scrollStore = new Map<string, number>();
   let viewEl: HTMLElement;
@@ -166,7 +170,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-  <div class="library-panel">
+  <div class="library-panel" style="--artwork-size: {artworkSize}px">
     <div class="content">
       <div class="header">
         {#if !selectedAlbum && !selectedArtist && !selectedGenre}
@@ -175,6 +179,9 @@
             <button class:active={mode === 'artists'} onclick={() => mode = 'artists'}>Artists</button>
             <button class:active={mode === 'genres'} onclick={() => mode = 'genres'}>Genres</button>
           </div>
+          <button class="size-btn" onclick={() => sizeIndex = (sizeIndex + 1) % 4}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg>
+          </button>
         {:else}
           <div class="breadcrumb">
             <button onclick={goBack} class="back-btn">← Back</button>
@@ -314,6 +321,23 @@
     border-bottom: 1px solid var(--bg-highlight);
     display: flex;
     align-items: center;
+    justify-content: space-between;
+  }
+
+  .size-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--comment);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .size-btn:hover {
+    color: var(--fg);
   }
 
   .mode-switcher {
@@ -401,7 +425,7 @@
 
   .album-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(var(--artwork-size), 1fr));
     gap: 24px;
   }
 
@@ -490,8 +514,8 @@
   }
 
   .album-art {
-    width: 120px;
-    height: 120px;
+    width: var(--artwork-size);
+    height: var(--artwork-size);
     border-radius: 8px;
     object-fit: cover;
     flex-shrink: 0;
@@ -669,7 +693,6 @@
     }
 
     .album-grid {
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
       gap: 16px;
     }
 
