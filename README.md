@@ -77,6 +77,7 @@ for clients that don't specify a node.
 
 - **Web**: open `kanade-web/` (Svelte) — `?server=ws://HOST:8080`
 - **TUI**: `cargo run -p kanade-tui --release`
+- **SwiftUI (macOS / iOS)**: open `kanade-swift/Package.swift` in Xcode and run the `KanadeNativeApp` scheme
 - **OpenHome**: point any control point at `HOST:8090`
 
 ### Nix Dev Shell
@@ -140,8 +141,8 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 | `kanade-node`              | Output node binary (connects to server, drives MPD) |
 | `kanade-tui`               | Terminal UI client (ratatui)                      |
 | `kanade-web`               | Web client (Svelte)                               |
+| `kanade-swift`             | Native Swift package + SwiftUI client scaffold    |
 
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
-
