@@ -3,6 +3,7 @@
   import { fly, fade } from 'svelte/transition';
   import { ws, mediaBase } from '../lib/stores';
   import { formatSampleRate, formatDuration } from '../lib/format';
+  import NodePicker from './NodePicker.svelte';
 
   let { visible = false, onClose }: { visible: boolean; onClose: () => void } = $props();
 
@@ -12,7 +13,6 @@
   let artworkError = $state(false);
   $effect(() => { artworkUrl; artworkError = false; });
   let showDetails = $state(false);
-  let showNodePicker = $state(false);
   
   let isPlaying = $derived(node?.status === 'playing');
   let position = $derived(node?.position_secs ?? 0);
@@ -186,34 +186,14 @@
             <input type="range" min="0" max="100" value={volume} onchange={setVolume} onclick={(e) => e.stopPropagation()} />
           </div>
 
-          {#if ws.nodes.length > 1}
-            <div class="node-picker" onclick={(e) => e.stopPropagation()}>
-              <button class="node-btn" onclick={() => showNodePicker = !showNodePicker}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1" fill="currentColor"/><circle cx="6" cy="18" r="1" fill="currentColor"/></svg>
-                <span class="node-label">{node?.name ?? '—'}</span>
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3l3 4 3-4z"/></svg>
-              </button>
-              {#if showNodePicker}
-                <div class="node-menu">
-                  {#each ws.nodes.filter(n => n.connected) as n (n.id)}
-                    <button class="node-option" class:active={n.id === node?.id} onclick={() => {
-                      ws.sendCommand({ cmd: 'select_node', node_id: n.id });
-                      showNodePicker = false;
-                    }}>
-                      {n.name}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
+          <NodePicker />
         </div>
       </div>
     </div>
   </div>
 {/if}
 
-<svelte:window onclick={() => { showNodePicker = false; showDetails = false; }} />
+<svelte:window onclick={() => { showDetails = false; }} />
 
 <style>
   .overlay-backdrop {
@@ -592,63 +572,6 @@
     .buttons {
       gap: 16px;
     }
-
-    .node-picker {
-      position: relative;
-      margin-top: 4px;
-    }
-
-    .node-btn {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      background: none;
-      border: none;
-      color: var(--comment);
-      cursor: pointer;
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .node-btn:hover { color: var(--fg); background: var(--bg-highlight); }
-
-    .node-label {
-      max-width: 120px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .node-menu {
-      position: absolute;
-      bottom: 100%;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--bg-dark);
-      border: 1px solid var(--bg-highlight);
-      border-radius: 8px;
-      padding: 4px;
-      min-width: 140px;
-      z-index: 50;
-      box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      margin-bottom: 8px;
-    }
-
-    .node-option {
-      display: block;
-      width: 100%;
-      text-align: left;
-      font-size: 13px;
-      color: var(--fg-dark);
-      padding: 8px 12px;
-      border-radius: 6px;
-      white-space: nowrap;
-    }
-    .node-option:hover { background: var(--bg-highlight); color: var(--fg); }
-    .node-option.active { color: var(--accent); }
   }
 
   @media (min-width: 769px) {
