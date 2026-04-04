@@ -20,7 +20,7 @@
 //! | Variable        | Default               | Description                        |
 //! |-----------------|-----------------------|------------------------------------|
 //! | `NODE_NAME`     | `node`                | Human-readable name for this node  |
-//! | `SERVER_ADDR`   | `ws://127.0.0.1:8082` | kanade server node endpoint        |
+//! | `SERVER_ADDR`   | `ws://127.0.0.1:8080` | kanade server node endpoint        |
 //! | `MPD_HOST`      | `127.0.0.1`           | Local MPD host                     |
 //! | `MPD_PORT`      | `6600`                | Local MPD port                     |
 
@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
 
     let node_name = std::env::var("NODE_NAME").unwrap_or_else(|_| "node".to_string());
     let server_addr = std::env::var("SERVER_ADDR")
-        .unwrap_or_else(|_| "ws://127.0.0.1:8082".to_string());
+        .unwrap_or_else(|_| "ws://127.0.0.1:8080".to_string());
     let mpd_host = std::env::var("MPD_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let mpd_port: u16 = std::env::var("MPD_PORT")
         .ok()

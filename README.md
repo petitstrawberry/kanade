@@ -32,21 +32,20 @@ single shared state.
 ```
   Clients                             Kanade Server                           Output Nodes
   ┌──────────┐                       ┌──────────────────┐                 ┌──────────────┐
-  │ kanade-  │  WS :8080, HTTP: 8081 │                  │   WS :8082      │ living-room  │
+  │ kanade-  │  WS :8080, HTTP: 8081 │                  │   WS :8080      │ living-room  │
   │ web      │─────────────────────▶ │  kanade-core     │────────────────▶│  (MPD)       │
   └──────────┘                       │  State · Queue   │                 └──────────────┘
-                                     │  Controller      │                 ┌──────────────┐
-                                     │                  │   WS :8082      │  study       │
-                                     │  kanade-db       │────────────────▶│  (MPD)       │
-                                     │  SQLite + FTS5   │                 └──────────────┘
-  ┌──────────┐  WS :8080             │                  │   WS :8082      ┌──────────────┐
+                                      │  Controller      │                 ┌──────────────┐
+                                      │                  │   WS :8080      │  study       │
+                                      │  kanade-db       │────────────────▶│  (MPD)       │
+                                      │  SQLite + FTS5   │                 └──────────────┘
+  ┌──────────┐  WS :8080             │                  │   WS :8080      ┌──────────────┐
   │ kanade-  │─────────────────────▶ │  kanade-scanner  │────────────────▶│  kitchen     │
   │ tui      │                       └──────────────────┘                 │  (MPD)       │
   └──────────┘                                                            └──────────────┘
 
-  WS   :8080   Client Subprotocol   (server ↔ web, tui)
-  WS   :8082   Node Subprotocol      (server ↔ output nodes)
-  HTTP :8081 Media Surface         (track streaming + artwork)
+  WS   :8080   All WebSocket clients   (web, tui, output nodes)
+  HTTP :8081   Media Surface           (track streaming + artwork)
 ```
 
 See [DESIGN.md](DESIGN.md) for detailed design decisions and data flow.
@@ -96,8 +95,7 @@ direnv allow   # or: nix develop
 | `SCAN_INTERVAL_SECS`    | `300`                          | Interval between periodic scans        |
 | `MEDIA_ADDR`            | `0.0.0.0:8081`                 | HTTP media server bind address         |
 | `MEDIA_PUBLIC_BASE_URL` | `http://127.0.0.1:8081`       | Public base URL for media file access  |
-| `NODE_ADDR`             | `0.0.0.0:8082`                 | Kanade protocol listen address         |
-| `WS_ADDR`               | `0.0.0.0:8080`                 | WebSocket client API bind address      |
+| `WS_ADDR`               | `0.0.0.0:8080`                 | WebSocket server bind address          |
 | `OH_ADDR`               | `0.0.0.0:8090`                 | OpenHome HTTP server bind address      |
 | `RUST_LOG`              | `kanade=info,kanade_core=debug`| Log level (tracing filter)             |
 
@@ -106,7 +104,7 @@ direnv allow   # or: nix develop
 | Variable     | Default                  | Description                            |
 | ------------ | ------------------------ | -------------------------------------- |
 | `NODE_NAME`  | `node`                   | Human-readable name (id is auto-assigned) |
-| `SERVER_ADDR`| `ws://127.0.0.1:8082`   | Kanade server node endpoint            |
+| `SERVER_ADDR`| `ws://127.0.0.1:8080`   | Kanade server WebSocket endpoint        |
 | `MPD_HOST`   | `127.0.0.1`              | Local MPD host                         |
 | `MPD_PORT`   | `6600`                   | Local MPD port                         |
 | `RUST_LOG`   | `kanade_node=info`       | Log filter                             |
@@ -116,8 +114,7 @@ direnv allow   # or: nix develop
 | Protocol | Port | Direction | Format |
 | -------- | ---- | --------- | ------ |
 | **Kanade Protocol** | | | |
-| ├─ Node Subprotocol | 8082 | Server ↔ Output Nodes | WebSocket JSON |
-| ├─ Client Subprotocol | 8080 | Server ↔ Clients | WebSocket JSON |
+| ├─ WebSocket | 8080 | Server ↔ All clients | WebSocket JSON |
 | └─ Media Surface | 8081 | Clients → Server | HTTP |
 | **OpenHome / UPnP** | 8090 | Control Points → Server | SOAP/XML |
 

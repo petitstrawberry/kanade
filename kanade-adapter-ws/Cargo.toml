@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 kanade-core = { path = "../kanade-core" }
 kanade-db = { path = "../kanade-db" }
+kanade-node-protocol = { path = "../kanade-node-protocol" }
+kanade-adapter-node-server = { path = "../kanade-adapter-node-server" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -14,3 +16,4 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+uuid = { workspace = true }

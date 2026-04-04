@@ -49,6 +49,7 @@ pub async fn run(
                     ServerMessage::Response { req_id: _, data } => {
                         app.handle_response(data);
                     }
+                    ServerMessage::NodeRegistrationAck { .. } => {}
                 }
             }
             Some(event) = event_rx.recv() => {

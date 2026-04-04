@@ -8,6 +8,8 @@
   let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
   let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
   let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
+  let artworkError = $state(false);
+  $effect(() => { artworkUrl; artworkError = false; });
   let isPlaying = $derived(node?.status === 'playing');
   let position = $derived(node?.position_secs ?? 0);
   let duration = $derived(currentTrack?.duration_secs ?? 0);
@@ -55,7 +57,13 @@
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="track-info" onclick={() => onOpenNowPlaying()}>
-        <img src={artworkUrl} alt="" class="artwork" onerror={(e) => (e.currentTarget.style.display = 'none')} />
+        {#if artworkUrl && !artworkError}
+          <img src={artworkUrl} alt="" class="artwork" onerror={() => (artworkError = true)} />
+        {:else}
+          <div class="artwork artwork-placeholder">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          </div>
+        {/if}
         <div class="meta">
           <span class="title" title={currentTrack.title || currentTrack.file_path.split('/').pop()}>
             {currentTrack.title || currentTrack.file_path.split('/').pop()}
@@ -186,7 +194,13 @@
     border-radius: 4px;
     flex-shrink: 0;
     object-fit: cover;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary, #1a1b26);
+    color: var(--fg-muted, #555);
   }
+  .artwork svg { width: 50%; height: 50%; }
 
   .meta {
     display: flex;

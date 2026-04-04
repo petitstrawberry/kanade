@@ -299,14 +299,22 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
 
         let album_id = album_id.split('?').next().unwrap_or(album_id).to_string();
 
+        info!(album_id = %album_id, "artwork request");
+
         let result = tokio::task::spawn_blocking({
             let db_path = db_path.clone();
             let album_id = album_id.clone();
             move || -> Result<ArtResult, String> {
                 let db = Database::open(&db_path).map_err(|e| e.to_string())?;
-                if let Some(art_path) = db.get_album_artwork_path(&album_id).map_err(|e| e.to_string())? {
-                    return Ok(ArtResult::FilePath(art_path));
+                let art_path = db.get_album_artwork_path(&album_id).map_err(|e| e.to_string())?;
+
+                if let Some(ref path) = art_path {
+                    if std::path::Path::new(path).exists() {
+                        return Ok(ArtResult::FilePath(path.clone()));
+                    }
+                    warn!("artwork_path exists in DB but file missing: {path}, falling back to embedded");
                 }
+
                 let tracks = db.get_tracks_by_album_id(&album_id).map_err(|e| e.to_string())?;
                 if let Some(track) = tracks.into_iter().next() {
                     if let Some(picture) = extract_embedded_picture(&track.file_path) {
@@ -326,20 +334,23 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
 
         match result {
             Ok(Ok(ArtResult::FilePath(art_path))) => {
+                info!(album_id = %album_id, path = %art_path, "serving artwork from file");
                 let art_type = content_type_for_path(&art_path);
                 if let Err(e) = serve_static_file(&mut writer, method, &art_path, art_type).await {
                     let status = if e.contains("open file:") { 404 } else { 500 };
                     let text = if status == 404 { "Not Found" } else { "Internal Server Error" };
                     write_simple_response(&mut writer, status, text, &[]).await?;
+                    warn!(album_id = %album_id, path = %art_path, error = %e, "failed to serve artwork file");
                     return Err(e);
                 }
             }
             Ok(Ok(ArtResult::Embedded(mime, data))) => {
+                info!(album_id = %album_id, mime = %mime, size = data.len(), "serving embedded artwork");
                 serve_bytes(&mut writer, method, &mime, &data).await?;
             }
             Ok(Err(e)) => {
                 write_simple_response(&mut writer, 404, "Artwork Not Found", &[]).await?;
-                debug!("artwork not found for album {album_id}: {e}");
+                warn!(album_id = %album_id, error = %e, "artwork not found");
             }
             Err(e) => {
                 write_simple_response(&mut writer, 500, "Internal Server Error", b"db error").await?;

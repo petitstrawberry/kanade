@@ -1,23 +1,38 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use futures_util::{SinkExt, StreamExt};
+use kanade_adapter_node_server::RemoteNodeOutput;
 use kanade_db::Database;
+use kanade_node_protocol::NodeRegistration;
+use kanade_core::model::{Node, PlaybackStatus};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, instrument, warn};
+use uuid::Uuid;
 
 use kanade_core::controller::Core;
 
 use crate::{
     broadcaster::WsBroadcaster,
-    command::{ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse},
+    command::{
+        ClientMessage, ServerMessage, WsCommand, WsNodeCommand, WsRequest, WsResponse,
+    },
 };
+
+const RECONNECT_GRACE_MS: u64 = 5000;
 
 pub struct WsServer {
     core: Arc<Core>,
     db_path: PathBuf,
     broadcaster: Arc<WsBroadcaster>,
     addr: SocketAddr,
+    media_base_url: String,
 }
 
 impl WsServer {
@@ -26,8 +41,15 @@ impl WsServer {
         db_path: PathBuf,
         broadcaster: Arc<WsBroadcaster>,
         addr: SocketAddr,
+        media_base_url: impl Into<String>,
     ) -> Self {
-        Self { core, db_path, broadcaster, addr }
+        Self {
+            core,
+            db_path,
+            broadcaster,
+            addr,
+            media_base_url: media_base_url.into(),
+        }
     }
 
     pub async fn run(self) {
@@ -39,6 +61,7 @@ impl WsServer {
         let core = self.core;
         let db_path = self.db_path;
         let broadcaster = self.broadcaster;
+        let media_base_url = self.media_base_url;
 
         loop {
             match listener.accept().await {
@@ -46,7 +69,15 @@ impl WsServer {
                     let ctrl = Arc::clone(&core);
                     let db_path = db_path.clone();
                     let rx = broadcaster.subscribe();
-                    tokio::spawn(handle_connection(stream, peer, ctrl, db_path, rx));
+                    let media_base_url = media_base_url.clone();
+                    tokio::spawn(handle_connection(
+                        stream,
+                        peer,
+                        ctrl,
+                        db_path,
+                        rx,
+                        media_base_url,
+                    ));
                 }
                 Err(e) => {
                     error!("WsServer: accept error: {e}");
@@ -63,6 +94,7 @@ async fn handle_connection(
     core: Arc<Core>,
     db_path: PathBuf,
     mut state_rx: tokio::sync::broadcast::Receiver<String>,
+    media_base_url: String,
 ) {
     let ws = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -75,9 +107,97 @@ async fn handle_connection(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    // Send current state snapshot immediately so the client
-    // has nodes, queue, and active output without waiting for
-    // the next state change broadcast.
+    let first_message = match tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match ws_rx.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    match serde_json::from_str::<ClientMessage>(&text) {
+                        Ok(msg) => break Some(msg),
+                        Err(e) => {
+                            warn!("WS bad first message from {peer}: {e}");
+                            return None;
+                        }
+                    }
+                }
+                Some(Ok(Message::Ping(payload))) => {
+                    if ws_tx.send(Message::Pong(payload)).await.is_err() {
+                        return None;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) | None => return None,
+                Some(Ok(_)) => {}
+                Some(Err(e)) => {
+                    warn!("WS error before mode selection from {peer}: {e}");
+                    return None;
+                }
+            }
+        }
+    })
+    .await
+    {
+        Ok(Some(msg)) => msg,
+        Ok(None) => return,
+        Err(_) => {
+            warn!("WS mode selection timed out for {peer}");
+            return;
+        }
+    };
+
+    match first_message {
+        ClientMessage::NodeRegistration(registration) => {
+            run_node_mode(
+                peer,
+                &core,
+                &mut ws_tx,
+                &mut ws_rx,
+                media_base_url,
+                registration,
+            )
+            .await;
+        }
+        ClientMessage::Command(cmd) => {
+            run_ui_mode(
+                peer,
+                &core,
+                &db_path,
+                &mut ws_tx,
+                &mut ws_rx,
+                &mut state_rx,
+                Some(ClientMessage::Command(cmd)),
+            )
+            .await;
+        }
+        ClientMessage::Request { req_id, req } => {
+            run_ui_mode(
+                peer,
+                &core,
+                &db_path,
+                &mut ws_tx,
+                &mut ws_rx,
+                &mut state_rx,
+                Some(ClientMessage::Request { req_id, req }),
+            )
+            .await;
+        }
+        ClientMessage::NodeStateUpdate(_) => {
+            warn!("WS node state update before registration from {peer}");
+        }
+    }
+}
+
+async fn run_ui_mode(
+    peer: SocketAddr,
+    core: &Arc<Core>,
+    db_path: &PathBuf,
+    ws_tx: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<TcpStream>,
+        Message,
+    >,
+    ws_rx: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>,
+    state_rx: &mut tokio::sync::broadcast::Receiver<String>,
+    first_message: Option<ClientMessage>,
+) {
     let snapshot = core.state_handle().read().await.clone();
     let node_summary = snapshot
         .nodes
@@ -95,6 +215,10 @@ async fn handle_connection(
     let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
     ping_interval.tick().await;
     let mut last_seen = Instant::now();
+
+    if let Some(msg) = first_message {
+        handle_ui_client_message(msg, peer, core, db_path, ws_tx).await;
+    }
 
     loop {
         tokio::select! {
@@ -117,18 +241,8 @@ async fn handle_connection(
                     Some(Ok(Message::Text(text))) => {
                         last_seen = Instant::now();
                         match serde_json::from_str::<ClientMessage>(&text) {
-                            Ok(ClientMessage::Command(cmd)) => {
-                                dispatch_command(cmd, &core).await;
-                            }
-                            Ok(ClientMessage::Request { req_id, req }) => {
-                                info!("WS request from {peer}: {:?}", req);
-                                let resp = handle_request(req, &core, &db_path).await;
-                                let msg = ServerMessage::Response { req_id, data: resp };
-                                if let Ok(json) = serde_json::to_string(&msg) {
-                                    if ws_tx.send(Message::Text(json)).await.is_err() {
-                                        break;
-                                    }
-                                }
+                            Ok(msg) => {
+                                handle_ui_client_message(msg, peer, core, db_path, ws_tx).await;
                             }
                             Err(e) => warn!("WS bad message from {peer}: {e}"),
                         }
@@ -171,6 +285,213 @@ async fn handle_connection(
                 }
             }
         }
+    }
+}
+
+async fn handle_ui_client_message(
+    msg: ClientMessage,
+    peer: SocketAddr,
+    core: &Core,
+    db_path: &PathBuf,
+    ws_tx: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<TcpStream>,
+        Message,
+    >,
+) {
+    match msg {
+        ClientMessage::Command(cmd) => {
+            dispatch_command(cmd, core).await;
+        }
+        ClientMessage::Request { req_id, req } => {
+            info!("WS request from {peer}: {:?}", req);
+            let resp = handle_request(req, core, db_path).await;
+            let msg = ServerMessage::Response { req_id, data: resp };
+            if let Ok(json) = serde_json::to_string(&msg) {
+                let _ = ws_tx.send(Message::Text(json)).await;
+            }
+        }
+        ClientMessage::NodeRegistration(_) | ClientMessage::NodeStateUpdate(_) => {
+            warn!("WS node message on UI connection from {peer}");
+        }
+    }
+}
+
+async fn run_node_mode(
+    peer: SocketAddr,
+    core: &Arc<Core>,
+    ws_tx: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<TcpStream>,
+        Message,
+    >,
+    ws_rx: &mut futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>,
+    media_base_url: String,
+    registration: NodeRegistration,
+) {
+    let display_name = registration
+        .display_name
+        .clone()
+        .or(registration.name.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("node-{}", Uuid::new_v4()));
+
+    let node_id = registration
+        .node_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| display_name.clone());
+
+    let ack = ServerMessage::NodeRegistrationAck {
+        ack: kanade_node_protocol::NodeRegistrationAck {
+            node_id: node_id.clone(),
+            media_base_url,
+        },
+    };
+    let ack_json = match serde_json::to_string(&ack) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!("Node {peer}: failed to serialize ack: {e}");
+            return;
+        }
+    };
+    if ws_tx.send(Message::Text(ack_json)).await.is_err() {
+        return;
+    }
+
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<WsNodeCommand>(64);
+    let connection_id = Uuid::new_v4().to_string();
+    let output: Arc<dyn kanade_core::ports::AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
+
+    core.register_output(node_id.clone(), connection_id.clone(), Arc::clone(&output))
+        .await;
+
+    core.add_node(Node {
+        id: node_id.clone(),
+        name: display_name,
+        connected: true,
+        status: PlaybackStatus::Stopped,
+        position_secs: 0.0,
+        volume: 50,
+    })
+    .await;
+
+    if let Err(e) = core.sync_connected_node_to_logical_state(&node_id).await {
+        warn!("Node {peer}: failed to restore logical node state: {e}");
+    }
+
+    let selected_node_id = {
+        let state = core.state_handle();
+        let selected = state.read().await.selected_node_id.clone();
+        selected
+    };
+    if let Some(selected_node) = selected_node_id {
+        if selected_node != node_id {
+            if let Err(e) = core.stop_node(&node_id).await {
+                warn!("Node {peer}: failed to stop non-active output: {e}");
+            }
+        }
+    }
+
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+    ping_interval.tick().await;
+    let mut last_seen = Instant::now();
+
+    loop {
+        tokio::select! {
+            _ = ping_interval.tick() => {
+                if last_seen.elapsed() > Duration::from_secs(90) {
+                    warn!("Node {peer}: heartbeat timed out");
+                    break;
+                }
+                match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Ping(vec![]))).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        warn!("Node {peer}: ping send timed out");
+                        break;
+                    }
+                }
+            }
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(cmd) => {
+                        let json = match serde_json::to_string(&cmd) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                warn!("Node {peer}: failed to serialize command: {e}");
+                                continue;
+                            }
+                        };
+                        match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Text(json))).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => {
+                                warn!("Node {peer}: command send timed out");
+                                break;
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+            msg = ws_rx.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        last_seen = Instant::now();
+                        match serde_json::from_str::<ClientMessage>(&text) {
+                            Ok(ClientMessage::NodeStateUpdate(update)) => {
+                                if !core.is_same_output(&node_id, &connection_id).await {
+                                    warn!("Node {peer}: ignoring stale state update for {node_id}");
+                                    continue;
+                                }
+                                core.sync_node_state(
+                                    &node_id,
+                                    update.status,
+                                    update.position_secs,
+                                    update.volume,
+                                    update.mpd_song_index,
+                                    update.projection_generation,
+                                )
+                                .await;
+                            }
+                            Ok(ClientMessage::NodeRegistration(_)) => {
+                                warn!("Node {peer}: duplicate registration ignored");
+                            }
+                            Ok(ClientMessage::Command(_) | ClientMessage::Request { .. }) => {
+                                warn!("Node {peer}: received UI message in node mode");
+                            }
+                            Err(e) => warn!("Node {peer}: bad state update: {e}"),
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        last_seen = Instant::now();
+                    }
+                    Some(Ok(Message::Ping(payload))) => {
+                        last_seen = Instant::now();
+                        match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Pong(payload))).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => break,
+                            Err(_) => break,
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {
+                        last_seen = Instant::now();
+                    }
+                    Some(Err(e)) => {
+                        warn!("Node {peer}: WS error: {e}");
+                        break;
+                    }
+                }
+            }
+
+        }
+    }
+
+    info!("Output node disconnected: {}", node_id);
+    tokio::time::sleep(Duration::from_millis(RECONNECT_GRACE_MS)).await;
+    if core.is_same_output(&node_id, &connection_id).await {
+        core.unregister_output(&node_id, &connection_id).await;
+        core.handle_node_disconnected(&node_id).await;
     }
 }
 

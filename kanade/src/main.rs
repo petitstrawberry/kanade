@@ -10,7 +10,6 @@ use kanade_core::{
 use kanade_scanner::spawn_background_scan;
 use tracing::info;
 
-use kanade_adapter_node_server::NodeServer;
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{WsBroadcaster, WsServer};
 
@@ -61,47 +60,46 @@ async fn main() -> Result<()> {
 
         let saved = db.load_playback_state()?;
 
-        match saved {
-            Some(saved_state) => {
-                let queue = saved_state
-                    .queue_file_paths
-                    .iter()
-                    .filter_map(|path| match db.get_track_by_path(path) {
-                        Ok(track) => track,
-                        Err(e) => {
-                            tracing::warn!(file_path = %path, error = %e, "failed to load track while restoring state");
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                let current_index = saved_state
-                    .current_index
-                    .filter(|idx| *idx < queue.len());
-
-                let repeat = match saved_state.repeat.as_str() {
-                    "one" => RepeatMode::One,
-                    "all" => RepeatMode::All,
-                    _ => RepeatMode::Off,
-                };
-
-                Ok(PlaybackState {
-                    nodes: Vec::new(),
-                    selected_node_id: saved_state.active_output_id,
-                    queue,
-                    current_index,
-                    shuffle: saved_state.shuffle,
-                    repeat,
+        if let Some(saved_state) = saved {
+            let queue = saved_state
+                .queue_file_paths
+                .iter()
+                .filter_map(|path| match db.get_track_by_path(path) {
+                    Ok(track) => track,
+                    Err(e) => {
+                        tracing::warn!(file_path = %path, error = %e, "failed to load track while restoring state");
+                        None
+                    }
                 })
-            }
-            None => Ok(PlaybackState {
+                .collect::<Vec<_>>();
+
+            let current_index = saved_state
+                .current_index
+                .filter(|idx| *idx < queue.len());
+
+            let repeat = match saved_state.repeat.as_str() {
+                "one" => RepeatMode::One,
+                "all" => RepeatMode::All,
+                _ => RepeatMode::Off,
+            };
+
+            Ok(PlaybackState {
+                nodes: Vec::new(),
+                selected_node_id: saved_state.active_output_id,
+                queue,
+                current_index,
+                shuffle: saved_state.shuffle,
+                repeat,
+            })
+        } else {
+            Ok(PlaybackState {
                 nodes: Vec::new(),
                 selected_node_id: None,
                 queue: Vec::new(),
                 current_index: None,
                 shuffle: false,
                 repeat: RepeatMode::Off,
-            }),
+            })
         }
     })
     .await??;
@@ -131,32 +129,16 @@ async fn main() -> Result<()> {
         None
     };
 
-    let node_addr: SocketAddr = std::env::var("NODE_ADDR")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| "0.0.0.0:8082".parse().unwrap());
-    let node_server = NodeServer::new(
-        Arc::clone(&core),
-        node_addr,
-        media_public_base_url,
-    );
-
     let ws_addr: SocketAddr = std::env::var("WS_ADDR")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
-    let ws_fallback_addr = SocketAddr::new(ws_addr.ip(), ws_addr.port() + 3);
     let ws_server = WsServer::new(
         Arc::clone(&core),
         PathBuf::from(&db_path),
         Arc::clone(&ws_broadcaster),
         ws_addr,
-    );
-    let ws_server_fallback = WsServer::new(
-        Arc::clone(&core),
-        PathBuf::from(&db_path),
-        Arc::clone(&ws_broadcaster),
-        ws_fallback_addr,
+        media_public_base_url,
     );
 
     let oh_addr: SocketAddr = std::env::var("OH_ADDR")
@@ -179,9 +161,7 @@ async fn main() -> Result<()> {
     });
 
     tokio::select! {
-        _ = node_server.run() => {}
         _ = ws_server.run() => {}
-        _ = ws_server_fallback.run() => {}
         _ = oh_server.run() => {}
     }
 

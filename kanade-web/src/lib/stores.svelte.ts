@@ -27,7 +27,6 @@ export const browserNode = new BrowserNode(player);
 
 export function connectBrowserNode(): void {
   const nodeWs = new URL(wsUrl);
-  nodeWs.port = '8082';
   nodeWs.pathname = '/';
   nodeWs.search = '';
   nodeWs.hash = '';

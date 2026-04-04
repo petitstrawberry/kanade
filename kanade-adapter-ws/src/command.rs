@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use kanade_core::model::{Album, RepeatMode, Track};
+use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -49,6 +50,10 @@ pub enum ServerMessage {
         req_id: u64,
         data: WsResponse,
     },
+    NodeRegistrationAck {
+        #[serde(flatten)]
+        ack: NodeRegistrationAck,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,4 +101,8 @@ pub enum ClientMessage {
         #[serde(flatten)]
         req: WsRequest,
     },
+    NodeStateUpdate(NodeStateUpdate),
+    NodeRegistration(NodeRegistration),
 }
+
+pub type WsNodeCommand = NodeCommand;
