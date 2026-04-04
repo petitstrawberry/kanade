@@ -44,7 +44,15 @@ final class KanadeAppModel {
 
     var currentTrackSubtitle: String {
         if let currentTrack = playbackState.currentTrack {
-            return currentTrack.artist ?? currentTrack.albumTitle ?? Self.playbackPrompt
+            if let artist = currentTrack.artist {
+                return artist
+            }
+
+            if let albumTitle = currentTrack.albumTitle {
+                return albumTitle
+            }
+
+            return Self.playbackPrompt
         }
 
         return Self.playbackPrompt
@@ -218,7 +226,7 @@ struct ContentView: View {
                 }
                 .padding(24)
             }
-            .background(backgroundStyle)
+            .background(.background)
             .navigationTitle(model.selectedAlbum?.title ?? "Browse")
             .safeAreaInset(edge: .bottom) {
                 nowPlaying
@@ -231,7 +239,11 @@ struct ContentView: View {
                 }
 
                 if album.id != model.albumTracks.first?.albumID {
-                    try? await model.selectAlbum(album)
+                    do {
+                        try await model.selectAlbum(album)
+                    } catch {
+                        model.errorMessage = error.localizedDescription
+                    }
                 }
             }
         }
@@ -263,10 +275,6 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-    }
-
-    private var backgroundStyle: some ShapeStyle {
-        .background
     }
 
     private var nowPlaying: some View {
@@ -369,8 +377,8 @@ struct ContentView: View {
                 .font(.title2.weight(.semibold))
 
             LazyVStack(spacing: 10) {
-                ForEach(model.albumTracks.indices, id: \.self) { index in
-                    trackRow(model.albumTracks[index], number: index + 1)
+                ForEach(Array(model.albumTracks.enumerated()), id: \.element.id) { index, track in
+                    trackRow(track, number: index + 1)
                 }
             }
         }
