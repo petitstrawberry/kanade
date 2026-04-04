@@ -18,6 +18,8 @@ struct KanadeNativeApp: App {
 @MainActor
 @Observable
 final class KanadeAppModel {
+    static let playbackPrompt = "Choose an album to start playback"
+
     var serverURLString = "ws://127.0.0.1:8080"
     var albums: [Album] = []
     var selectedAlbum: Album?
@@ -42,10 +44,10 @@ final class KanadeAppModel {
 
     var currentTrackSubtitle: String {
         if let currentTrack = playbackState.currentTrack {
-            return currentTrack.artist ?? currentTrack.albumTitle ?? "Choose an album to start playback"
+            return currentTrack.artist ?? currentTrack.albumTitle ?? Self.playbackPrompt
         }
 
-        return "Choose an album to start playback"
+        return Self.playbackPrompt
     }
 
     func connect() {
@@ -367,8 +369,8 @@ struct ContentView: View {
                 .font(.title2.weight(.semibold))
 
             LazyVStack(spacing: 10) {
-                ForEach(Array(model.albumTracks.enumerated()), id: \.element.id) { index, track in
-                    trackRow(track, number: index + 1)
+                ForEach(model.albumTracks.indices, id: \.self) { index in
+                    trackRow(model.albumTracks[index], number: index + 1)
                 }
             }
         }
