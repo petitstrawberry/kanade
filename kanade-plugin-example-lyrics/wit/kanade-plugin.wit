@@ -1,0 +1,49 @@
+package kanade:plugin;
+
+/// Host-provided functions that plugins may call
+interface host {
+    /// Make an HTTP POST request
+    http-post: func(url: string, body: string) -> result<string, string>;
+    /// Read a configuration value
+    get-config: func(key: string) -> option<string>;
+    /// Log a debug message
+    log: func(message: string);
+}
+
+/// Types and interface every kanade plugin must implement
+interface plugin {
+    /// Track metadata passed between host and plugins
+    record track-info {
+        id: string,
+        title: option<string>,
+        artist: option<string>,
+        album-title: option<string>,
+        album-artist: option<string>,
+        duration-secs: option<f64>,
+        track-number: option<u32>,
+    }
+
+    /// Events emitted by the host to plugins
+    variant playback-event {
+        /// Active track changed (previous, current)
+        track-changed(tuple<option<track-info>, track-info>),
+        /// Playback paused
+        playback-paused(tuple<option<track-info>, f64>),
+        /// Playback resumed without track change
+        playback-resumed(tuple<option<track-info>, f64>),
+        /// Playback stopped
+        playback-stopped(option<track-info>),
+        /// Track reached scrobble threshold
+        scrobble-point(track-info),
+    }
+
+    /// Called when a playback event occurs
+    on-event: func(event: playback-event);
+    /// Return the plugin name (used for logging and identification)
+    name: func() -> string;
+}
+
+world kanade-plugin {
+    import host;
+    export plugin;
+}

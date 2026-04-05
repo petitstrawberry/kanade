@@ -12,8 +12,11 @@ members = [
     "kanade-tui",
     "kanade-node",
     "kanade",
+    "kanade-plugin-lastfm",
+    "kanade-wasm-runtime",
 ]
 resolver = "2"
+exclude = ["kanade-plugin-example-lyrics"]
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -4,6 +4,7 @@ use anyhow::Result;
 use kanade_core::{
     controller::Core,
     model::RepeatMode,
+    plugin::PluginBridge,
     ports::{EventBroadcaster, StatePersister},
     state::PlaybackState,
 };
@@ -43,6 +44,24 @@ async fn main() -> Result<()> {
         Arc::clone(&ws_broadcaster) as Arc<dyn EventBroadcaster>,
         Arc::clone(&oh_broadcaster) as Arc<dyn EventBroadcaster>,
     ];
+
+    #[cfg(feature = "lastfm")]
+    let broadcasters = {
+        let mut b = broadcasters;
+        match kanade_plugin_lastfm::LastFmScrobbler::from_env() {
+            Ok(scrobbler) => {
+                info!("Last.fm plugin loaded");
+                let bridge = Arc::new(PluginBridge::new(vec![Arc::new(scrobbler)
+                    as std::sync::Arc<dyn kanade_core::plugin::KanadePlugin>]));
+                b.push(bridge as Arc<dyn EventBroadcaster>);
+                b
+            }
+            Err(e) => {
+                info!("Last.fm plugin disabled: {e}");
+                b
+            }
+        }
+    };
 
     let db_path = std::env::var("DB_PATH").unwrap_or_else(|_| "kanade.db".to_string());
     let db = Arc::new(Mutex::new(kanade_db::Database::open(&db_path)?));

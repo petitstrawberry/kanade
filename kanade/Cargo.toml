@@ -15,6 +15,7 @@ kanade-adapter-node-server = { path = "../kanade-adapter-node-server" }
 kanade-adapter-ws = { path = "../kanade-adapter-ws" }
 kanade-adapter-openhome = { path = "../kanade-adapter-openhome" }
 kanade-server-http = { path = "../kanade-server-http" }
+kanade-plugin-lastfm = { path = "../kanade-plugin-lastfm", optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -22,3 +23,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
+
+[features]
+default = ["lastfm"]
+lastfm = ["kanade-plugin-lastfm"]

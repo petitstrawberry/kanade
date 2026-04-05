@@ -2,3 +2,5 @@
 Cargo.lock
 .direnv
 /music
+kanade.db
+*.log

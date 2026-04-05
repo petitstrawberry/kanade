@@ -1,0 +1,16 @@
+[package]
+name = "kanade-plugin-lastfm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+kanade-core = { path = "../kanade-core" }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+md-5 = "0.10"
+quick-xml = { version = "0.37", features = ["serialize"] }
+chrono = "0.4"
