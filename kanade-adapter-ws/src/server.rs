@@ -500,6 +500,41 @@ async fn run_node_mode(
 
 async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Option<String>) {
     info!("WS command: {:?}", cmd);
+
+    let is_queue_op = matches!(
+        &cmd,
+        WsCommand::Play
+            | WsCommand::Pause
+            | WsCommand::Stop
+            | WsCommand::Next
+            | WsCommand::Previous
+            | WsCommand::Seek { .. }
+            | WsCommand::SetVolume { .. }
+            | WsCommand::SetRepeat { .. }
+            | WsCommand::SetShuffle { .. }
+            | WsCommand::AddToQueue { .. }
+            | WsCommand::AddTracksToQueue { .. }
+            | WsCommand::PlayIndex { .. }
+            | WsCommand::RemoveFromQueue { .. }
+            | WsCommand::MoveInQueue { .. }
+            | WsCommand::ClearQueue
+            | WsCommand::ReplaceAndPlay { .. }
+    );
+
+    if is_queue_op {
+        let state = core.state_handle();
+        let sel_id = state.read().await.selected_node_id.clone();
+        if let Some(ref sel) = sel_id {
+            let is_local = state.read().await.node(sel)
+                .map(|n| n.node_type == kanade_core::model::NodeType::Local)
+                .unwrap_or(false);
+            if is_local && local_node_id.as_deref() != Some(sel.as_str()) {
+                warn!("Rejected command on non-owned local node {}", sel);
+                return;
+            }
+        }
+    }
+
     let result = match cmd {
         WsCommand::Play => core.play().await,
         WsCommand::Pause => core.pause().await,
