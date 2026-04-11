@@ -34,9 +34,10 @@ pub struct Artist {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RepeatMode {
+    #[default]
     Off,
     One,
     All,
@@ -51,6 +52,14 @@ pub enum PlaybackStatus {
     Loading,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeType {
+    #[default]
+    Remote,
+    Local,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
@@ -60,6 +69,34 @@ pub struct Node {
     pub status: PlaybackStatus,
     pub position_secs: f64,
     pub volume: u8,
+    #[serde(default)]
+    pub node_type: NodeType,
+    #[serde(default)]
+    pub queue: Vec<Track>,
+    #[serde(default)]
+    pub current_index: Option<usize>,
+    #[serde(default)]
+    pub repeat: RepeatMode,
+    #[serde(default)]
+    pub shuffle: bool,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            connected: true,
+            status: PlaybackStatus::Stopped,
+            position_secs: 0.0,
+            volume: 50,
+            node_type: NodeType::Remote,
+            queue: Vec::new(),
+            current_index: None,
+            repeat: RepeatMode::Off,
+            shuffle: false,
+        }
+    }
 }
 
 fn default_connected() -> bool {

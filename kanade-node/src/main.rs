@@ -37,7 +37,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use kanade_adapter_mpd::{MpdClient, MpdRenderer, MpdStateSync};
 use kanade_core::{
-    model::{Node, PlaybackStatus},
+    model::Node,
     ports::{AudioOutput, EventBroadcaster},
     state::PlaybackState,
 };
@@ -119,10 +119,7 @@ async fn main() -> Result<()> {
         nodes: vec![Node {
             id: String::new(),
             name: node_name.clone(),
-            connected: true,
-            status: PlaybackStatus::Stopped,
-            position_secs: 0.0,
-            volume: 50,
+            ..Default::default()
         }],
         selected_node_id: None,
         queue: Vec::new(),

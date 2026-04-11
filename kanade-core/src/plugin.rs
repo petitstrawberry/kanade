@@ -266,10 +266,9 @@ mod tests {
             nodes: vec![Node {
                 id: "default".to_string(),
                 name: "default".to_string(),
-                connected: true,
                 status,
                 position_secs,
-                volume: 50,
+                ..Default::default()
             }],
             selected_node_id: Some("default".to_string()),
             queue,

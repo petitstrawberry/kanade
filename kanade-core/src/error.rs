@@ -17,11 +17,17 @@ pub enum CoreError {
     #[error("queue index out of bounds")]
     QueueIndexOutOfBounds,
 
+    #[error("local session not found")]
+    LocalSessionNotFound,
+
     #[error("track not found: {0}")]
     TrackNotFound(String),
 
     #[error("invalid volume: value must be 0–100")]
     InvalidVolume,
+
+    #[error("handoff failed: {0}")]
+    HandoffFailed(String),
 
     #[error("internal error: {0}")]
     Internal(String),

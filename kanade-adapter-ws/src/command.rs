@@ -23,6 +23,22 @@ pub enum WsCommand {
     MoveInQueue { from: usize, to: usize },
     ClearQueue,
     ReplaceAndPlay { tracks: Vec<Track>, index: usize },
+    LocalSessionStart { device_name: String },
+    LocalSessionStop,
+    LocalSessionUpdate {
+        tracks: Vec<Track>,
+        #[serde(default)]
+        index: Option<usize>,
+        position_secs: f64,
+        status: kanade_core::model::PlaybackStatus,
+        volume: u8,
+        repeat: RepeatMode,
+        shuffle: bool,
+    },
+    Handoff {
+        from_node_id: String,
+        to_node_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

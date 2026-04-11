@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use futures_util::{SinkExt, StreamExt};
 use kanade_core::{
     controller::Core,
-    model::{Node, PlaybackStatus},
+    model::Node,
 };
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 use tokio::net::{TcpListener, TcpStream};
@@ -139,10 +139,7 @@ async fn handle_node_connection(
     core.add_node(Node {
         id: node_id.clone(),
         name: display_name,
-        connected: true,
-        status: PlaybackStatus::Stopped,
-        position_secs: 0.0,
-        volume: 50,
+        ..Default::default()
     })
     .await;
 

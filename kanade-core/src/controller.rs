@@ -6,7 +6,7 @@ use tracing::{info, instrument, warn};
 
 use crate::{
     error::CoreError,
-    model::{Node, PlaybackStatus, RepeatMode, Track},
+    model::{Node, NodeType, PlaybackStatus, RepeatMode, Track},
     ports::{AudioOutput, EventBroadcaster, StatePersister},
     state::PlaybackState,
 };
@@ -117,8 +117,6 @@ impl Core {
         *self.state.write().await = state;
     }
 
-    /// Apply an external state update (e.g. from a remote output node) to the
-    /// named node, then broadcast the change to all event listeners.
     pub async fn sync_node_state(
         &self,
         node_id: &str,
@@ -149,36 +147,24 @@ impl Core {
         };
 
         let mut s = self.state.write().await;
-        let is_selected_node = s.selected_node_id.as_deref() == Some(node_id);
         let mut changed = false;
         if let Some(node) = s.node_mut(node_id) {
+            if node.status != status {
+                node.status = status;
+                changed = true;
+            }
+            if (node.position_secs - position_secs).abs() > f64::EPSILON {
+                node.position_secs = position_secs;
+                changed = true;
+            }
             if node.volume != volume {
                 node.volume = volume;
                 changed = true;
             }
 
-            if is_selected_node {
-                if node.status != status {
-                    node.status = status;
-                    changed = true;
-                }
-                if (node.position_secs - position_secs).abs() > f64::EPSILON {
-                    node.position_secs = position_secs;
-                    changed = true;
-                }
-                if let Some(next_index) = projected_current_index {
-                    if next_index < s.queue.len() && s.current_index != Some(next_index) {
-                        s.current_index = Some(next_index);
-                        changed = true;
-                    }
-                }
-            } else {
-                if node.status != PlaybackStatus::Stopped {
-                    node.status = PlaybackStatus::Stopped;
-                    changed = true;
-                }
-                if node.position_secs != 0.0 {
-                    node.position_secs = 0.0;
+            if let Some(next_index) = projected_current_index {
+                if next_index < node.queue.len() && node.current_index != Some(next_index) {
+                    node.current_index = Some(next_index);
                     changed = true;
                 }
             }
@@ -216,9 +202,25 @@ impl Core {
         } else {
             s.nodes.push(node.clone());
         }
-        if (is_first || s.selected_node_id.is_none()) && node.connected {
+        let should_select = (is_first || s.selected_node_id.is_none()) && node.connected;
+        if should_select {
             s.selected_node_id = Some(node.id.clone());
+
+            let should_migrate_queue = s.node(&node.id).is_some_and(|n| n.queue.is_empty()) && !s.queue.is_empty();
+            if should_migrate_queue {
+                let queue = std::mem::take(&mut s.queue);
+                let current_index = s.current_index.take();
+                let shuffle = s.shuffle;
+                let repeat = s.repeat;
+                if let Some(n) = s.node_mut(&node.id) {
+                    n.queue = queue;
+                    n.current_index = current_index;
+                    n.shuffle = shuffle;
+                    n.repeat = repeat;
+                }
+            }
         }
+        s.sync_top_level_from_selected_node();
         drop(s);
         self.broadcast().await;
     }
@@ -325,6 +327,118 @@ impl Core {
         self.transport_state.write().await.remove(node_id);
         self.outputs.write().await.remove(node_id);
         self.broadcast().await;
+    }
+
+    pub async fn local_session_start(&self, device_name: &str) -> Result<String, CoreError> {
+        let node_id = format!("local-{}", uuid::Uuid::new_v4());
+        let mut s = self.state.write().await;
+        s.nodes.push(Node {
+            id: node_id.clone(),
+            name: device_name.to_string(),
+            connected: true,
+            node_type: NodeType::Local,
+            ..Default::default()
+        });
+        drop(s);
+        self.broadcast().await;
+        Ok(node_id)
+    }
+
+    pub async fn local_session_stop(&self, node_id: &str) -> Result<(), CoreError> {
+        {
+            let mut s = self.state.write().await;
+            let node = s.node(node_id).ok_or(CoreError::LocalSessionNotFound)?;
+            if node.node_type != NodeType::Local {
+                return Err(CoreError::LocalSessionNotFound);
+            }
+            s.nodes.retain(|n| n.id != node_id);
+            if s.selected_node_id.as_deref() == Some(node_id) {
+                s.selected_node_id = s.nodes.iter().find(|n| n.connected).map(|n| n.id.clone());
+            }
+        }
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn local_session_update(
+        &self,
+        node_id: &str,
+        queue: Vec<Track>,
+        current_index: Option<usize>,
+        position_secs: f64,
+        status: PlaybackStatus,
+        volume: u8,
+        repeat: RepeatMode,
+        shuffle: bool,
+    ) -> Result<(), CoreError> {
+        {
+            let mut s = self.state.write().await;
+            let node = s.node_mut(node_id).ok_or(CoreError::LocalSessionNotFound)?;
+            if node.node_type != NodeType::Local {
+                return Err(CoreError::LocalSessionNotFound);
+            }
+            node.queue = queue;
+            node.current_index = current_index;
+            node.position_secs = position_secs;
+            node.status = status;
+            node.volume = volume;
+            node.repeat = repeat;
+            node.shuffle = shuffle;
+        }
+        self.broadcast().await;
+        Ok(())
+    }
+
+    pub async fn handoff(&self, from_node_id: &str, to_node_id: &str) -> Result<(), CoreError> {
+        {
+            let s = self.state.read().await;
+            let _from = s.node(from_node_id).ok_or(CoreError::NodeNotFound)?;
+            let to = s.node(to_node_id).ok_or(CoreError::NodeNotFound)?;
+            if !to.connected {
+                return Err(CoreError::HandoffFailed("target node not connected".into()));
+            }
+        }
+
+        let (queue, current_index, position_secs) = {
+            let s = self.state.read().await;
+            let from_node = s.node(from_node_id).ok_or(CoreError::NodeNotFound)?;
+            (
+                from_node.queue.clone(),
+                from_node.current_index,
+                from_node.position_secs,
+            )
+        };
+
+        {
+            let mut s = self.state.write().await;
+            if let Some(node) = s.node_mut(to_node_id) {
+                node.queue = queue.clone();
+                node.current_index = current_index;
+                node.position_secs = position_secs;
+            }
+        }
+
+        let target_type = {
+            let s = self.state.read().await;
+            s.node(to_node_id).map(|n| n.node_type)
+        };
+
+        if target_type == Some(NodeType::Remote) {
+            self.sync_output_to_global(to_node_id).await?;
+            for o in self.each_output(to_node_id).await? {
+                o.play().await?;
+                if position_secs > 0.0 {
+                    o.seek(position_secs).await?;
+                }
+            }
+            let mut s = self.state.write().await;
+            if let Some(node) = s.node_mut(to_node_id) {
+                node.status = PlaybackStatus::Playing;
+            }
+        }
+
+        self.broadcast().await;
+        Ok(())
     }
 
     pub async fn cleanup_disconnected_nodes(&self, _max_age: std::time::Duration) {
@@ -479,11 +593,11 @@ impl Core {
     pub async fn play_node(&self, node_id: &str) -> Result<(), CoreError> {
         for o in self.each_output(node_id).await? { o.play().await?; }
         let mut s = self.state.write().await;
-        if !s.queue.is_empty() && s.current_index.is_none() {
-            s.current_index = Some(0);
-        }
-        if s.current_index.is_some() {
-            if let Some(node) = s.node_mut(node_id) {
+        if let Some(node) = s.node_mut(node_id) {
+            if !node.queue.is_empty() && node.current_index.is_none() {
+                node.current_index = Some(0);
+            }
+            if node.current_index.is_some() {
                 node.status = PlaybackStatus::Playing;
             }
         }
@@ -517,28 +631,38 @@ impl Core {
 
     pub async fn next(&self) -> Result<(), CoreError> {
         let active_node_id = self.active_node_id().await?;
-        let (queue, projection_start, loaded_len) = {
+        let (queue_paths, projection_start, loaded_len) = {
             let mut s = self.state.write().await;
-            if s.queue.is_empty() {
+            let (next_index, queue_len, repeat) = {
+                let node = s.node(&active_node_id).ok_or(CoreError::NodeNotFound)?;
+                (node.current_index, node.queue.len(), node.repeat)
+            };
+            if queue_len == 0 {
                 return Err(CoreError::QueueEmpty);
             }
-            let next = match s.current_index {
-                Some(i) => match s.repeat {
+            let next = match next_index {
+                Some(i) => match repeat {
                     RepeatMode::Off => {
-                        if i + 1 < s.queue.len() { i + 1 } else { return Err(CoreError::QueueEmpty) }
+                        if i + 1 < queue_len { i + 1 } else { return Err(CoreError::QueueEmpty) }
                     }
                     RepeatMode::One => i,
-                    RepeatMode::All => (i + 1) % s.queue.len(),
+                    RepeatMode::All => (i + 1) % queue_len,
                 },
                 None => 0,
             };
-            s.current_index = Some(next);
+            if let Some(node) = s.node_mut(&active_node_id) {
+                node.current_index = Some(next);
+            }
             for node in s.nodes.iter_mut() {
                 node.position_secs = 0.0;
             }
-            let queue = Self::build_queue_file_paths(&s.queue, s.current_index);
+            let queue = {
+                let node = s.node(&active_node_id).ok_or(CoreError::NodeNotFound)?;
+                Self::build_queue_file_paths(&node.queue, node.current_index)
+            };
             let loaded_len = queue.len();
-            (queue, s.current_index, loaded_len)
+            let projection_start = s.node(&active_node_id).and_then(|node| node.current_index);
+            (queue, projection_start, loaded_len)
         };
         info!(projection_start = ?projection_start, loaded_len, "core.next: rebuilt queue projection");
         let projection_generation = self
@@ -547,7 +671,7 @@ impl Core {
         info!(projection_generation, "core.next: rebuilt transport state");
         for o in self.active_outputs().await? {
             info!("core.next: sending set_queue to active output");
-            o.set_queue(&queue, projection_generation).await?;
+            o.set_queue(&queue_paths, projection_generation).await?;
         }
         for o in self.active_outputs().await? {
             info!("core.next: sending play to active output");
@@ -555,9 +679,6 @@ impl Core {
         }
         let mut s = self.state.write().await;
         info!("core.next: reacquired state write for status update");
-        for node in s.nodes.iter_mut() {
-            node.status = PlaybackStatus::Stopped;
-        }
         if let Some(node) = s.node_mut(&active_node_id) {
             node.status = PlaybackStatus::Playing;
         }
@@ -569,40 +690,47 @@ impl Core {
 
     pub async fn previous(&self) -> Result<(), CoreError> {
         let active_node_id = self.active_node_id().await?;
-        let (queue, projection_start, loaded_len) = {
+        let (queue_paths, projection_start, loaded_len) = {
             let mut s = self.state.write().await;
-            if s.queue.is_empty() {
+            let (current_index, queue_len, repeat) = {
+                let node = s.node(&active_node_id).ok_or(CoreError::NodeNotFound)?;
+                (node.current_index, node.queue.len(), node.repeat)
+            };
+            if queue_len == 0 {
                 return Err(CoreError::QueueEmpty);
             }
-            let prev = match s.current_index {
-                Some(0) | None => match s.repeat {
+            let prev = match current_index {
+                Some(0) | None => match repeat {
                     RepeatMode::Off => return Err(CoreError::QueueEmpty),
                     RepeatMode::One => 0,
-                    RepeatMode::All => s.queue.len() - 1,
+                    RepeatMode::All => queue_len - 1,
                 },
                 Some(i) => i - 1,
             };
-            s.current_index = Some(prev);
+            if let Some(node) = s.node_mut(&active_node_id) {
+                node.current_index = Some(prev);
+            }
             for node in s.nodes.iter_mut() {
                 node.position_secs = 0.0;
             }
-            let queue = Self::build_queue_file_paths(&s.queue, s.current_index);
+            let queue = {
+                let node = s.node(&active_node_id).ok_or(CoreError::NodeNotFound)?;
+                Self::build_queue_file_paths(&node.queue, node.current_index)
+            };
             let loaded_len = queue.len();
-            (queue, s.current_index, loaded_len)
+            let projection_start = s.node(&active_node_id).and_then(|node| node.current_index);
+            (queue, projection_start, loaded_len)
         };
         let projection_generation = self
             .rebuild_projection_state(&active_node_id, projection_start, loaded_len)
             .await;
         for o in self.active_outputs().await? {
-            o.set_queue(&queue, projection_generation).await?;
+            o.set_queue(&queue_paths, projection_generation).await?;
         }
         for o in self.active_outputs().await? {
             o.play().await?;
         }
         let mut s = self.state.write().await;
-        for node in s.nodes.iter_mut() {
-            node.status = PlaybackStatus::Stopped;
-        }
         if let Some(node) = s.node_mut(&active_node_id) {
             node.status = PlaybackStatus::Playing;
         }
@@ -637,22 +765,33 @@ impl Core {
     }
 
     pub async fn set_shuffle(&self, shuffle: bool) -> Result<(), CoreError> {
-        self.state.write().await.shuffle = shuffle;
+        let mut s = self.state.write().await;
+        let node = s.selected_node_mut().ok_or(CoreError::NoActiveOutput)?;
+        node.shuffle = shuffle;
+        drop(s);
         self.broadcast().await;
         Ok(())
     }
 
     pub async fn set_repeat(&self, repeat: RepeatMode) -> Result<(), CoreError> {
-        self.state.write().await.repeat = repeat;
+        let mut s = self.state.write().await;
+        let node = s.selected_node_mut().ok_or(CoreError::NoActiveOutput)?;
+        node.repeat = repeat;
+        drop(s);
         self.broadcast().await;
         Ok(())
     }
 
     pub async fn add_to_queue(&self, track: Track) -> Result<(), CoreError> {
         let file_paths = vec![track.file_path.clone()];
+        let selected_node_id = {
+            let s = self.state.read().await;
+            s.selected_node_id.clone().ok_or(CoreError::NoActiveOutput)?
+        };
         {
             let mut s = self.state.write().await;
-            s.queue.push(track);
+            let node = s.node_mut(&selected_node_id).ok_or(CoreError::NodeNotFound)?;
+            node.queue.push(track);
         }
         if let Some(outputs) = self.maybe_active_outputs().await {
             for o in outputs { o.add(&file_paths).await?; }
@@ -667,9 +806,14 @@ impl Core {
             return Ok(());
         }
         let file_paths: Vec<String> = tracks.iter().map(|t| t.file_path.clone()).collect();
+        let selected_node_id = {
+            let s = self.state.read().await;
+            s.selected_node_id.clone().ok_or(CoreError::NoActiveOutput)?
+        };
         {
             let mut s = self.state.write().await;
-            s.queue.extend(tracks);
+            let node = s.node_mut(&selected_node_id).ok_or(CoreError::NodeNotFound)?;
+            node.queue.extend(tracks);
         }
         if let Some(outputs) = self.maybe_active_outputs().await {
             for o in outputs { o.add(&file_paths).await?; }
@@ -687,12 +831,11 @@ impl Core {
             }
         }
         let mut s = self.state.write().await;
-        s.queue.clear();
-        s.current_index = None;
-        for node in s.nodes.iter_mut() {
-            node.position_secs = 0.0;
-            node.status = PlaybackStatus::Stopped;
-        }
+        let node = s.selected_node_mut().ok_or(CoreError::NoActiveOutput)?;
+        node.queue.clear();
+        node.current_index = None;
+        node.position_secs = 0.0;
+        node.status = PlaybackStatus::Stopped;
         drop(s);
         self.broadcast().await;
         Ok(())
@@ -701,23 +844,22 @@ impl Core {
     pub async fn remove_from_queue(&self, index: usize) -> Result<(), CoreError> {
         let mpd_index = {
             let mut s = self.state.write().await;
-            if index >= s.queue.len() {
+            let node = s.selected_node_mut().ok_or(CoreError::NoActiveOutput)?;
+            if index >= node.queue.len() {
                 return Err(CoreError::QueueIndexOutOfBounds);
             }
-            let mpd_index = s.current_index.map(|ci| index.saturating_sub(ci)).unwrap_or(index);
-            s.queue.remove(index);
-            match s.current_index {
-                Some(ci) if ci == index && s.queue.is_empty() => {
-                    s.current_index = None;
-                    for node in s.nodes.iter_mut() {
-                        node.status = PlaybackStatus::Stopped;
-                    }
+            let mpd_index = node.current_index.map(|ci| index.saturating_sub(ci)).unwrap_or(index);
+            node.queue.remove(index);
+            match node.current_index {
+                Some(ci) if ci == index && node.queue.is_empty() => {
+                    node.current_index = None;
+                    node.status = PlaybackStatus::Stopped;
                 }
                 Some(ci) if ci == index => {
-                    s.current_index = Some(ci.min(s.queue.len() - 1));
+                    node.current_index = Some(ci.min(node.queue.len() - 1));
                 }
                 Some(ci) if ci > index => {
-                    s.current_index = Some(ci - 1);
+                    node.current_index = Some(ci - 1);
                 }
                 _ => {}
             }
@@ -734,17 +876,18 @@ impl Core {
     pub async fn move_in_queue(&self, from: usize, to: usize) -> Result<(), CoreError> {
         let (mpd_from, mpd_to) = {
             let mut s = self.state.write().await;
-            if from >= s.queue.len() || to >= s.queue.len() {
+            let node = s.selected_node_mut().ok_or(CoreError::NoActiveOutput)?;
+            if from >= node.queue.len() || to >= node.queue.len() {
                 return Err(CoreError::QueueIndexOutOfBounds);
             }
-            let mpd_from = s.current_index.map(|ci| from.saturating_sub(ci)).unwrap_or(from);
-            let mpd_to = s.current_index.map(|ci| to.saturating_sub(ci)).unwrap_or(to);
-            let track = s.queue.remove(from);
-            s.queue.insert(to, track);
-            match s.current_index {
-                Some(ci) if ci == from => { s.current_index = Some(to); }
-                Some(ci) if from < ci && ci <= to => { s.current_index = Some(ci - 1); }
-                Some(ci) if to <= ci && ci < from => { s.current_index = Some(ci + 1); }
+            let mpd_from = node.current_index.map(|ci| from.saturating_sub(ci)).unwrap_or(from);
+            let mpd_to = node.current_index.map(|ci| to.saturating_sub(ci)).unwrap_or(to);
+            let track = node.queue.remove(from);
+            node.queue.insert(to, track);
+            match node.current_index {
+                Some(ci) if ci == from => { node.current_index = Some(to); }
+                Some(ci) if from < ci && ci <= to => { node.current_index = Some(ci - 1); }
+                Some(ci) if to <= ci && ci < from => { node.current_index = Some(ci + 1); }
                 _ => {}
             }
             (mpd_from, mpd_to)
@@ -758,30 +901,38 @@ impl Core {
 
     pub async fn play_index(&self, index: usize) -> Result<(), CoreError> {
         let active_node_id = self.active_node_id().await?;
-        let (queue, projection_start, loaded_len) = {
+        let (queue_paths, projection_start, loaded_len) = {
             let mut s = self.state.write().await;
-            if index >= s.queue.len() {
+            let queue_len = s
+                .node(&active_node_id)
+                .ok_or(CoreError::NodeNotFound)?
+                .queue
+                .len();
+            if index >= queue_len {
                 return Err(CoreError::QueueIndexOutOfBounds);
             }
-            s.current_index = Some(index);
+            if let Some(node) = s.node_mut(&active_node_id) {
+                node.current_index = Some(index);
+            }
             for node in s.nodes.iter_mut() {
                 node.position_secs = 0.0;
             }
-            let queue = Self::build_queue_file_paths(&s.queue, s.current_index);
+            let queue = {
+                let node = s.node(&active_node_id).ok_or(CoreError::NodeNotFound)?;
+                Self::build_queue_file_paths(&node.queue, node.current_index)
+            };
             let loaded_len = queue.len();
-            (queue, s.current_index, loaded_len)
+            let projection_start = s.node(&active_node_id).and_then(|node| node.current_index);
+            (queue, projection_start, loaded_len)
         };
         let projection_generation = self
             .rebuild_projection_state(&active_node_id, projection_start, loaded_len)
             .await;
         for o in self.active_outputs().await? {
-            o.set_queue(&queue, projection_generation).await?;
+            o.set_queue(&queue_paths, projection_generation).await?;
         }
         for o in self.active_outputs().await? { o.play().await?; }
         let mut s = self.state.write().await;
-        for node in s.nodes.iter_mut() {
-            node.status = PlaybackStatus::Stopped;
-        }
         if let Some(node) = s.node_mut(&active_node_id) {
             node.status = PlaybackStatus::Playing;
         }
@@ -795,6 +946,10 @@ impl Core {
         tracks: Vec<Track>,
         start_index: Option<usize>,
     ) -> Result<(), CoreError> {
+        let selected_node_id = {
+            let s = self.state.read().await;
+            s.selected_node_id.clone().ok_or(CoreError::NoActiveOutput)?
+        };
         let active_node_id = self.active_node_id().await.ok();
         let start = start_index.unwrap_or(0);
         let head = tracks.get(start).map(|t| vec![t.file_path.clone()]).unwrap_or_default();
@@ -814,11 +969,13 @@ impl Core {
             }
         }
         let mut s = self.state.write().await;
-        s.queue = tracks;
-        s.current_index = start_index;
-        for node in s.nodes.iter_mut() {
+        if let Some(node) = s.node_mut(&selected_node_id) {
+            node.queue = tracks;
+            node.current_index = start_index;
             node.position_secs = 0.0;
             node.status = PlaybackStatus::Stopped;
+        } else {
+            return Err(CoreError::NodeNotFound);
         }
         if start_index.is_some() {
             if let Some(active_node_id) = active_node_id.as_ref() {
@@ -840,11 +997,12 @@ impl Core {
     pub async fn sync_output_to_global(&self, node_id: &str) -> Result<(), CoreError> {
         let (queue, projection_start, loaded_len, volume) = {
             let s = self.state.read().await;
+            let node = s.node(node_id).ok_or(CoreError::NodeNotFound)?;
             (
-                Self::build_queue_file_paths(&s.queue, s.current_index),
-                s.current_index,
-                s.queue.len(),
-                s.node(node_id).map(|n| n.volume).unwrap_or(50),
+                Self::build_queue_file_paths(&node.queue, node.current_index),
+                node.current_index,
+                node.queue.len(),
+                node.volume,
             )
         };
 
@@ -941,7 +1099,12 @@ impl Core {
     }
 
     async fn broadcast(&self) {
-        let snapshot = self.state.read().await.clone();
+        let snapshot = {
+            let mut s = self.state.write().await;
+            s.sync_top_level_from_selected_node();
+            drop(s);
+            self.state.read().await.clone()
+        };
         let node_summary = snapshot
             .nodes
             .iter()
@@ -1058,10 +1221,7 @@ mod tests {
         core.add_node(Node {
             id: "default".to_string(),
             name: "node".to_string(),
-            connected: true,
-            status: PlaybackStatus::Stopped,
-            position_secs: 0.0,
-            volume: 50,
+            ..Default::default()
         })
         .await;
         (core, output)

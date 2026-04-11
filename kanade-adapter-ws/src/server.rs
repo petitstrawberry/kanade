@@ -9,7 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use kanade_adapter_node_server::RemoteNodeOutput;
 use kanade_db::Database;
 use kanade_node_protocol::NodeRegistration;
-use kanade_core::model::{Node, PlaybackStatus};
+use kanade_core::model::Node;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -198,6 +198,7 @@ async fn run_ui_mode(
     state_rx: &mut tokio::sync::broadcast::Receiver<String>,
     first_message: Option<ClientMessage>,
 ) {
+    let mut local_node_id: Option<String> = None;
     let snapshot = core.state_handle().read().await.clone();
     let node_summary = snapshot
         .nodes
@@ -217,7 +218,7 @@ async fn run_ui_mode(
     let mut last_seen = Instant::now();
 
     if let Some(msg) = first_message {
-        handle_ui_client_message(msg, peer, core, db_path, ws_tx).await;
+        handle_ui_client_message(msg, peer, core, db_path, ws_tx, &mut local_node_id).await;
     }
 
     loop {
@@ -242,7 +243,7 @@ async fn run_ui_mode(
                         last_seen = Instant::now();
                         match serde_json::from_str::<ClientMessage>(&text) {
                             Ok(msg) => {
-                                handle_ui_client_message(msg, peer, core, db_path, ws_tx).await;
+                                handle_ui_client_message(msg, peer, core, db_path, ws_tx, &mut local_node_id).await;
                             }
                             Err(e) => warn!("WS bad message from {peer}: {e}"),
                         }
@@ -286,6 +287,10 @@ async fn run_ui_mode(
             }
         }
     }
+
+    if let Some(nid) = local_node_id {
+        let _ = core.local_session_stop(&nid).await;
+    }
 }
 
 async fn handle_ui_client_message(
@@ -297,10 +302,11 @@ async fn handle_ui_client_message(
         tokio_tungstenite::WebSocketStream<TcpStream>,
         Message,
     >,
+    local_node_id: &mut Option<String>,
 ) {
     match msg {
         ClientMessage::Command(cmd) => {
-            dispatch_command(cmd, core).await;
+            dispatch_command(cmd, core, local_node_id).await;
         }
         ClientMessage::Request { req_id, req } => {
             info!("WS request from {peer}: {:?}", req);
@@ -367,10 +373,7 @@ async fn run_node_mode(
     core.add_node(Node {
         id: node_id.clone(),
         name: display_name,
-        connected: true,
-        status: PlaybackStatus::Stopped,
-        position_secs: 0.0,
-        volume: 50,
+        ..Default::default()
     })
     .await;
 
@@ -495,7 +498,7 @@ async fn run_node_mode(
     }
 }
 
-async fn dispatch_command(cmd: WsCommand, core: &Core) {
+async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Option<String>) {
     info!("WS command: {:?}", cmd);
     let result = match cmd {
         WsCommand::Play => core.play().await,
@@ -516,6 +519,36 @@ async fn dispatch_command(cmd: WsCommand, core: &Core) {
         WsCommand::ClearQueue => core.clear_queue().await,
         WsCommand::ReplaceAndPlay { tracks, index } => {
             core.set_queue(tracks, Some(index)).await
+        }
+        WsCommand::LocalSessionStart { device_name } => match core.local_session_start(&device_name).await {
+            Ok(node_id) => {
+                *local_node_id = Some(node_id);
+                Ok(())
+            }
+            Err(e) => Err(e),
+        },
+        WsCommand::LocalSessionStop => {
+            if let Some(ref nid) = *local_node_id {
+                if let Err(e) = core.local_session_stop(nid).await {
+                    warn!("local_session_stop error: {e}");
+                }
+                *local_node_id = None;
+            }
+            Ok(())
+        }
+        WsCommand::LocalSessionUpdate { tracks, index, position_secs, status, volume, repeat, shuffle } => {
+            if let Some(ref nid) = *local_node_id {
+                if let Err(e) = core.local_session_update(nid, tracks, index, position_secs, status, volume, repeat, shuffle).await {
+                    warn!("local_session_update error: {e}");
+                }
+            }
+            Ok(())
+        }
+        WsCommand::Handoff { from_node_id, to_node_id } => {
+            if let Err(e) = core.handoff(&from_node_id, &to_node_id).await {
+                warn!("handoff error: {e}");
+            }
+            Ok(())
         }
     };
     if let Err(e) = result {
@@ -604,9 +637,12 @@ async fn handle_request(
         WsRequest::GetQueue => {
             let state = core.state_handle();
             let s = state.read().await;
+            let (tracks, idx) = s.selected_node()
+                .map(|n| (n.queue.clone(), n.current_index))
+                .unwrap_or_else(|| (s.queue.clone(), s.current_index));
             WsResponse::Queue {
-                tracks: s.queue.clone(),
-                current_index: s.current_index,
+                tracks,
+                current_index: idx,
             }
         }
     }

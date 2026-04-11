@@ -14,5 +14,5 @@ pub mod state;
 
 pub use controller::Core;
 pub use error::CoreError;
-pub use model::{Album, Artist, Node, PlaybackStatus, RepeatMode, Track};
+pub use model::{Album, Artist, Node, NodeType, PlaybackStatus, RepeatMode, Track};
 pub use state::PlaybackState;
