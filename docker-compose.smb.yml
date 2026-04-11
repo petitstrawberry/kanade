@@ -1,0 +1,24 @@
+# SMB/CIFS volume override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.smb.yml up -d
+#
+# Required .env:
+#   SMB_HOST=192.168.0.101
+#   SMB_SHARE=music/Music
+#   SMB_USER=your_username
+#   SMB_PASS=your_password
+
+services:
+  kanade:
+    volumes:
+      - music:/music:ro
+
+  mpd:
+    volumes:
+      - music:/music:ro
+
+volumes:
+  music:
+    driver_opts:
+      type: cifs
+      o: "username=${SMB_USER},password=${SMB_PASS},ro,vers=3.0,iocharset=utf8"
+      device: "//${SMB_HOST}/${SMB_SHARE}"

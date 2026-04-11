@@ -1,0 +1,76 @@
+services:
+  kanade:
+    image: ghcr.io/petitstrawberry/kanade:main
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: kanade
+    ports:
+      - "${WS_PORT:-8080}:8080"
+      - "${MEDIA_PORT:-8081}:8081"
+      - "${OH_PORT:-8090}:8090"
+    environment:
+      MUSIC_DIR: /music
+      DB_PATH: /data/kanade.db
+      MEDIA_ADDR: "0.0.0.0:8081"
+      MEDIA_PUBLIC_BASE_URL: "http://${HOST:-127.0.0.1}:${MEDIA_PORT:-8081}"
+      WS_ADDR: "0.0.0.0:8080"
+      OH_ADDR: "0.0.0.0:8090"
+      SCAN_INTERVAL_SECS: "${SCAN_INTERVAL_SECS:-300}"
+      RUST_LOG: "${RUST_LOG:-kanade=info,kanade_core=debug}"
+      LASTFM_API_KEY: "${LASTFM_API_KEY:-}"
+      LASTFM_SECRET: "${LASTFM_SECRET:-}"
+      LASTFM_SESSION_KEY: "${LASTFM_SESSION_KEY:-}"
+    volumes:
+      - ${MUSIC_DIR:-./music}:/music:ro
+      - kanade-data:/data
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_started
+
+  web:
+    image: ghcr.io/petitstrawberry/kanade-web:main
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    restart: unless-stopped
+
+  node:
+    image: ghcr.io/petitstrawberry/kanade:main
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: kanade-node
+    profiles:
+      - node
+      - full
+    environment:
+      NODE_NAME: "${NODE_NAME:-default}"
+      SERVER_ADDR: "ws://kanade:8080"
+      MPD_HOST: "${MPD_HOST:-mpd}"
+      MPD_PORT: "${MPD_PORT:-6600}"
+      RUST_LOG: "${NODE_RUST_LOG:-kanade_node=info}"
+    restart: unless-stopped
+    depends_on:
+      - kanade
+      - mpd
+
+  mpd:
+    image: giof71/mpd-alsa:latest
+    profiles:
+      - node
+      - full
+    ports:
+      - "${MPD_PORT:-6600}:6600"
+    volumes:
+      - ${MUSIC_DIR:-./music}:/music:ro
+      - mpd-data:/var/lib/mpd
+      - ./docker/mpd.conf:/etc/mpd.conf:ro
+    restart: unless-stopped
+
+volumes:
+  kanade-data:
+  mpd-data:
