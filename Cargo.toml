@@ -32,5 +32,5 @@ sha2 = "0.10"
 hex = "0.4"
 walkdir = "2"
 lofty = "0.22"
-ratatui = "0.29"
+ratatui = "0.30"
 crossterm = { version = "0.28", features = ["event-stream"] }
