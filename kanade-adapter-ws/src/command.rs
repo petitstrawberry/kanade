@@ -23,7 +23,11 @@ pub enum WsCommand {
     MoveInQueue { from: usize, to: usize },
     ClearQueue,
     ReplaceAndPlay { tracks: Vec<Track>, index: usize },
-    LocalSessionStart { device_name: String },
+    LocalSessionStart {
+        device_name: String,
+        #[serde(default)]
+        device_id: Option<String>,
+    },
     LocalSessionStop,
     LocalSessionUpdate {
         tracks: Vec<Track>,

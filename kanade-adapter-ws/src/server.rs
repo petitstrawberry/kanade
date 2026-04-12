@@ -555,7 +555,7 @@ async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Optio
         WsCommand::ReplaceAndPlay { tracks, index } => {
             core.set_queue(tracks, Some(index)).await
         }
-        WsCommand::LocalSessionStart { device_name } => match core.local_session_start(&device_name).await {
+        WsCommand::LocalSessionStart { device_name, device_id } => match core.local_session_start(&device_name, device_id.as_deref()).await {
             Ok(node_id) => {
                 *local_node_id = Some(node_id);
                 Ok(())

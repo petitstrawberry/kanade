@@ -79,6 +79,8 @@ pub struct Node {
     pub repeat: RepeatMode,
     #[serde(default)]
     pub shuffle: bool,
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 impl Default for Node {
@@ -95,6 +97,7 @@ impl Default for Node {
             current_index: None,
             repeat: RepeatMode::Off,
             shuffle: false,
+            device_id: None,
         }
     }
 }

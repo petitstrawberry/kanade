@@ -329,14 +329,36 @@ impl Core {
         self.broadcast().await;
     }
 
-    pub async fn local_session_start(&self, device_name: &str) -> Result<String, CoreError> {
-        let node_id = format!("local-{}", uuid::Uuid::new_v4());
+    pub async fn local_session_start(&self, device_name: &str, device_id: Option<&str>) -> Result<String, CoreError> {
         let mut s = self.state.write().await;
+        
+        if let Some(did) = device_id {
+            if let Some(existing) = s.nodes.iter_mut().find(|n| 
+                n.device_id.as_deref() == Some(did) && n.node_type == NodeType::Local
+            ) {
+                let node_id = existing.id.clone();
+                if existing.connected {
+                    drop(s);
+                    return Ok(node_id);
+                }
+                existing.connected = true;
+                existing.name = device_name.to_string();
+                drop(s);
+                self.broadcast().await;
+                return Ok(node_id);
+            }
+        }
+        
+        let node_id = device_id
+            .map(|id| format!("local-{}", id))
+            .unwrap_or_else(|| format!("local-{}", uuid::Uuid::new_v4()));
+        
         s.nodes.push(Node {
             id: node_id.clone(),
             name: device_name.to_string(),
             connected: true,
             node_type: NodeType::Local,
+            device_id: device_id.map(String::from),
             ..Default::default()
         });
         drop(s);
