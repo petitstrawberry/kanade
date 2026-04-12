@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 use anyhow::Result;
 use kanade_core::{
     controller::Core,
-    model::RepeatMode,
+    model::{Node, NodeType, RepeatMode},
     plugin::PluginBridge,
     ports::{EventBroadcaster, StatePersister},
     state::PlaybackState,
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
 
         let saved = db.load_playback_state()?;
 
-        if let Some(saved_state) = saved {
+        let (queue, current_index, selected_node_id, shuffle, repeat) = if let Some(saved_state) = saved {
             let queue = saved_state
                 .queue_file_paths
                 .iter()
@@ -102,24 +102,51 @@ async fn main() -> Result<()> {
                 _ => RepeatMode::Off,
             };
 
-            Ok(PlaybackState {
-                nodes: Vec::new(),
-                selected_node_id: saved_state.active_output_id,
-                queue,
-                current_index,
-                shuffle: saved_state.shuffle,
-                repeat,
-            })
+            (queue, current_index, saved_state.active_output_id, saved_state.shuffle, repeat)
         } else {
-            Ok(PlaybackState {
-                nodes: Vec::new(),
-                selected_node_id: None,
-                queue: Vec::new(),
-                current_index: None,
-                shuffle: false,
-                repeat: RepeatMode::Off,
+            (Vec::new(), None, None, false, RepeatMode::Off)
+        };
+
+        let saved_nodes = db.load_all_node_states().unwrap_or_default();
+        let nodes: Vec<Node> = saved_nodes
+            .into_iter()
+            .filter(|s| s.node_id != "__global__")
+            .map(|s| {
+                let queue: Vec<_> = s.queue_file_paths
+                    .iter()
+                    .filter_map(|path| db.get_track_by_path(path).ok().flatten())
+                    .collect();
+                let current_index = s.current_index.filter(|idx| *idx < queue.len());
+                let repeat = match s.repeat.as_str() {
+                    "one" => RepeatMode::One,
+                    "all" => RepeatMode::All,
+                    _ => RepeatMode::Off,
+                };
+                Node {
+                    id: s.node_id,
+                    name: String::new(),
+                    connected: false,
+                    status: kanade_core::model::PlaybackStatus::Stopped,
+                    position_secs: 0.0,
+                    volume: s.volume,
+                    node_type: NodeType::Remote,
+                    queue,
+                    current_index,
+                    repeat,
+                    shuffle: s.shuffle,
+                    device_id: None,
+                }
             })
-        }
+            .collect();
+
+        Ok(PlaybackState {
+            nodes,
+            selected_node_id,
+            queue,
+            current_index,
+            shuffle,
+            repeat,
+        })
     })
     .await??;
 
