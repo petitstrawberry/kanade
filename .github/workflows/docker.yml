@@ -46,7 +46,7 @@ jobs:
             type=ref,event=branch
 
       - name: Build kanade (amd64 native)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -56,7 +56,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build kanade-web (amd64 native)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.web
@@ -136,7 +136,7 @@ jobs:
 
       - name: Push kanade (${{ matrix.suffix }})
         id: push-kanade
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -148,7 +148,7 @@ jobs:
 
       - name: Push kanade-web (${{ matrix.suffix }})
         id: push-web
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.web
