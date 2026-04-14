@@ -29,7 +29,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ${{ env.REGISTRY }}/kanade
@@ -37,7 +37,7 @@ jobs:
             type=sha
             type=ref,event=branch
 
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta-web
         with:
           images: ${{ env.REGISTRY }}/kanade-web
@@ -118,7 +118,7 @@ jobs:
 
       - name: Docker meta (kanade)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -127,7 +127,7 @@ jobs:
 
       - name: Docker meta (kanade-web)
         id: meta-web
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-web
           tags: |
@@ -205,7 +205,7 @@ jobs:
 
       - name: Docker meta (kanade)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -214,7 +214,7 @@ jobs:
 
       - name: Docker meta (kanade-web)
         id: meta-web
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-web
           tags: |
