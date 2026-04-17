@@ -9,7 +9,7 @@ use kanade_core::{
     state::PlaybackState,
 };
 use kanade_scanner::spawn_background_scan;
-use tracing::info;
+use tracing::{info, warn};
 
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{WsBroadcaster, WsServer};
@@ -34,8 +34,15 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:8081".parse().unwrap());
+
+    let server_host = std::env::var("SERVER_HOST").ok();
     let media_public_base_url = std::env::var("MEDIA_PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| format!("http://127.0.0.1:{}", media_addr.port()));
+        .unwrap_or_else(|_| {
+            match &server_host {
+                Some(host) => format!("http://{}:{}", host, media_addr.port()),
+                None => format!("http://127.0.0.1:{}", media_addr.port()),
+            }
+        });
 
     let (ws_broadcaster, _ws_rx) = WsBroadcaster::new(64);
     let oh_broadcaster = OpenHomeBroadcaster::new();
@@ -205,6 +212,39 @@ async fn main() -> Result<()> {
             core_for_cleanup.cleanup_disconnected_nodes(Duration::from_secs(30)).await;
         }
     });
+
+    let mdns_instance_name = std::env::var("MDNS_NAME").unwrap_or_else(|_| "Kanade".to_string());
+    let _mdns = match mdns_sd::ServiceDaemon::new() {
+        Ok(mdns) => {
+            let mut properties: Vec<(&str, String)> = vec![
+                ("version", "1.0".to_string()),
+                ("ws_port", ws_addr.port().to_string()),
+                ("http_port", media_addr.port().to_string()),
+            ];
+            if let Some(host) = &server_host {
+                properties.push(("host", host.clone()));
+            }
+            match mdns_sd::ServiceInfo::new(
+                "_kanade._tcp.local.",
+                &mdns_instance_name,
+                &format!("{}.local.", mdns_instance_name.to_lowercase().replace(' ', "-")),
+                "",
+                ws_addr.port(),
+                properties.as_slice(),
+            ) {
+                Ok(info) => match mdns.register(info) {
+                    Ok(_) => info!(instance = %mdns_instance_name, port = ws_addr.port(), "mDNS service registered"),
+                    Err(e) => warn!(error = %e, "failed to register mDNS service"),
+                },
+                Err(e) => warn!(error = %e, "failed to create mDNS service info"),
+            }
+            Some(mdns)
+        }
+        Err(e) => {
+            warn!(error = %e, "failed to create mDNS daemon");
+            None
+        }
+    };
 
     tokio::select! {
         _ = ws_server.run() => {}

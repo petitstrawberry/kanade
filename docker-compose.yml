@@ -13,7 +13,7 @@ services:
       MUSIC_DIR: /music
       DB_PATH: /data/kanade.db
       MEDIA_ADDR: "0.0.0.0:8081"
-      MEDIA_PUBLIC_BASE_URL: "http://${HOST:-127.0.0.1}:${MEDIA_PORT:-8081}"
+      SERVER_HOST: "${SERVER_HOST:-}"
       WS_ADDR: "0.0.0.0:8080"
       OH_ADDR: "0.0.0.0:8090"
       SCAN_INTERVAL_SECS: "${SCAN_INTERVAL_SECS:-300}"
