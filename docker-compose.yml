@@ -25,9 +25,6 @@ services:
       - ${MUSIC_DIR:-./music}:/music:ro
       - kanade-data:/data
     restart: unless-stopped
-    depends_on:
-      web:
-        condition: service_started
 
   web:
     image: ghcr.io/petitstrawberry/kanade-web:main
@@ -38,6 +35,8 @@ services:
       - "${WEB_PORT:-3000}:80"
     restart: unless-stopped
 
+  # Output node — connects to external MPD by default.
+  # Use: docker compose --profile node up
   node:
     image: ghcr.io/petitstrawberry/kanade:main
     build:
@@ -46,23 +45,22 @@ services:
     command: kanade-node
     profiles:
       - node
-      - full
     environment:
       NODE_NAME: "${NODE_NAME:-default}"
-      SERVER_ADDR: "ws://kanade:8080"
-      MPD_HOST: "${MPD_HOST:-mpd}"
+      SERVER_ADDR: "${SERVER_ADDR:-ws://kanade:8080}"
+      MPD_HOST: "${MPD_HOST:-host.docker.internal}"
       MPD_PORT: "${MPD_PORT:-6600}"
       RUST_LOG: "${NODE_RUST_LOG:-kanade_node=info}"
     restart: unless-stopped
-    depends_on:
-      - kanade
-      - mpd
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
+  # Containerized MPD — for development or when no host MPD is available.
+  # Use: docker compose --profile mpd up
   mpd:
     image: giof71/mpd-alsa:latest
     profiles:
-      - node
-      - full
+      - mpd
     ports:
       - "${MPD_PORT:-6600}:6600"
     volumes:

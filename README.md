@@ -94,10 +94,12 @@ direnv allow   # or: nix develop
 | `MUSIC_DIR`             | —                              | Root music directory for scanning      |
 | `DB_PATH`               | `kanade.db`                    | SQLite database file path              |
 | `SCAN_INTERVAL_SECS`    | `300`                          | Interval between periodic scans        |
+| `SERVER_HOST`           | —                              | Public hostname (mDNS advertisement + media URL fallback) |
 | `MEDIA_ADDR`            | `0.0.0.0:8081`                 | HTTP media server bind address         |
-| `MEDIA_PUBLIC_BASE_URL` | `http://127.0.0.1:8081`       | Public base URL for media file access  |
+| `MEDIA_PUBLIC_BASE_URL` | auto (from `SERVER_HOST`)      | Public base URL for media file access (overrides `SERVER_HOST`) |
 | `WS_ADDR`               | `0.0.0.0:8080`                 | WebSocket server bind address          |
 | `OH_ADDR`               | `0.0.0.0:8090`                 | OpenHome HTTP server bind address      |
+| `MDNS_NAME`             | `Kanade`                       | mDNS service instance name             |
 | `RUST_LOG`              | `kanade=info,kanade_core=debug`| Log level (tracing filter)             |
 
 ### Output Node (`kanade-node`)
@@ -109,6 +111,31 @@ direnv allow   # or: nix develop
 | `MPD_HOST`   | `127.0.0.1`              | Local MPD host                         |
 | `MPD_PORT`   | `6600`                   | Local MPD port                         |
 | `RUST_LOG`   | `kanade_node=info`       | Log filter                             |
+
+## Docker
+
+### Server
+
+```sh
+docker compose up -d
+```
+
+### Output node (same host)
+
+```sh
+docker compose --profile node up -d
+```
+
+Node connects to a host MPD by default (`MPD_HOST=host.docker.internal`).
+
+### Output node (remote host)
+
+Copy `docker-compose.node.yml` to the target machine and run:
+
+```sh
+SERVER_ADDR=ws://kanade.example.com:8080 MPD_HOST=127.0.0.1 \
+  docker compose -f docker-compose.node.yml up -d
+```
 
 ## Protocols
 

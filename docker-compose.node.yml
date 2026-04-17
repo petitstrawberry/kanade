@@ -1,0 +1,23 @@
+# Standalone output node deployment.
+# Copy this file to the machine running kanade-node (e.g. Raspberry Pi, NUC).
+#
+# Usage:
+#   SERVER_ADDR=ws://kanade.example.com:8080 MPD_HOST=127.0.0.1 docker compose -f docker-compose.node.yml up -d
+
+services:
+  node:
+    image: ghcr.io/petitstrawberry/kanade:main
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: kanade-node
+    container_name: kanade-node
+    environment:
+      NODE_NAME: "${NODE_NAME:-default}"
+      SERVER_ADDR: "${SERVER_ADDR:-ws://kanade:8080}"
+      MPD_HOST: "${MPD_HOST:-host.docker.internal}"
+      MPD_PORT: "${MPD_PORT:-6600}"
+      RUST_LOG: "${NODE_RUST_LOG:-kanade_node=info}"
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
