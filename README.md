@@ -118,29 +118,29 @@ direnv allow   # or: nix develop
 
 ### Output Node (`kanade-node`)
 
-| Variable     | Default                  | Description                            |
-| ------------ | ------------------------ | -------------------------------------- |
+| Variable     | Default                  | Description                               |
+| ------------ | ------------------------ | ----------------------------------------- |
 | `NODE_NAME`  | `node`                   | Human-readable name (id is auto-assigned) |
-| `SERVER_ADDR`| `127.0.0.1:8080`        | Kanade server address (host:port)        |
-| `MPD_HOST`   | `127.0.0.1`              | Local MPD host                         |
-| `MPD_PORT`   | `6600`                   | Local MPD port                         |
-| `RUST_LOG`   | `kanade_node=info`       | Log filter                             |
+| `SERVER_ADDR`| `127.0.0.1:8080`         | Kanade server address (host:port)         |
+| `MPD_HOST`   | `127.0.0.1`              | Local MPD host                            |
+| `MPD_PORT`   | `6600`                   | Local MPD port                            |
+| `RUST_LOG`   | `kanade_node=info`       | Log filter                                |
 
 ## Architecture
 
 ```
-  Clients                          Kanade Server (:8080)                     Output Nodes
-  ┌──────────┐                     ┌────────────────────┐                  ┌──────────────┐
+  Clients                          Kanade Server (:8080)                       Output Nodes
+  ┌──────────┐                     ┌────────────────────┐                    ┌──────────────┐
   │ kanade-  │  ws://host:8080/ws  │                    │  ws://host:8080/ws │ living-room  │
-  │ web      │───────────────────▶ │  axum unified      │───────────────▶ │  (MPD)       │
-  └──────────┘                     │  /ws    WebSocket  │                  └──────────────┘
-                                   │  /media/ HTTP      │                  ┌──────────────┐
+  │ web      │───────────────────▶ │  axum unified      │──────────────────▶ │  (MPD)       │
+  └──────────┘                     │  /ws    WebSocket  │                    └──────────────┘
+                                   │  /media/ HTTP      │                    ┌──────────────┐
   ┌──────────┐  ws://host:8080/ws  │                    │  ws://host:8080/ws │  study       │
-  │ kanade-  │───────────────────▶ │  kanade-core       │───────────────▶ │  (MPD)       │
-  │ tui      │                     │  kanade-db         │                  └──────────────┘
-  └──────────┘                     │  kanade-scanner    │                  ┌──────────────┐
-                                   └────────────────────┘                  │  kitchen     │
-                                                                          └──────────────┘
+  │ kanade-  │───────────────────▶ │  kanade-core       │──────────────────▶ │  (MPD)       │
+  │ tui      │                     │  kanade-db         │                    └──────────────┘
+  └──────────┘                     │  kanade-scanner    │                    ┌──────────────┐
+                                   └────────────────────┘                    │  kitchen     │
+                                                                             └──────────────┘
 
   :8080  /ws      WebSocket (clients + output nodes)
          /media/  HTTP media surface (track streaming + artwork)
