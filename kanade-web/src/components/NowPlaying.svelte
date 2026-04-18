@@ -2,21 +2,42 @@
   import { onMount } from 'svelte';
   import { fly, fade } from 'svelte/transition';
   import { ws } from '../lib/stores';
-  import { getMediaBase } from '../lib/stores';
   import { formatSampleRate, formatDuration } from '../lib/format';
-  import { buildMediaUrl } from '../lib/media-auth';
   import NodePicker from './NodePicker.svelte';
 
   let { visible = false, onClose }: { visible: boolean; onClose: () => void } = $props();
 
   let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
   let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
-  let mediaBase = $derived(getMediaBase());
-  let artworkUrl = $derived(currentTrack?.album_id && ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${currentTrack.album_id}`) : null);
+  let artworkUrl = $state<string | null>(null);
   let artworkError = $state(false);
-  $effect(() => { artworkUrl; artworkError = false; });
   let showDetails = $state(false);
-  
+
+  $effect(() => {
+    const albumId = currentTrack?.album_id;
+    artworkError = false;
+    if (!albumId) {
+      artworkUrl = null;
+      return;
+    }
+
+    const path = `/media/art/${albumId}`;
+    let cancelled = false;
+    ws.signUrls([path]).then((map) => {
+      if (!cancelled) {
+        artworkUrl = map.get(path) ?? null;
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        artworkUrl = null;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
   let isPlaying = $derived(node?.status === 'playing');
   let position = $derived(node?.position_secs ?? 0);
   let duration = $derived(currentTrack?.duration_secs ?? 0);
@@ -95,7 +116,7 @@
         <div class="info-wrapper">
           <button type="button" class="cover-art" onclick={() => showDetails = !showDetails} aria-label="Toggle details">
             {#if artworkUrl && !artworkError}
-              <img src={artworkUrl} alt={currentTrack.album_title || 'Album'} onerror={() => (artworkError = true)} />
+              <img src={artworkUrl} alt={currentTrack.album_title || 'Album'} referrerpolicy="no-referrer" onerror={() => (artworkError = true)} />
             {:else}
               <div class="cover-fallback">
                 <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
@@ -159,32 +180,32 @@
 
           <div class="buttons">
             <button class="icon sm" class:active={ws.shuffle} onclick={toggleShuffle} aria-label="Shuffle">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"></path><path d="M10 2l-4 4 4 4"></path></svg>
             </button>
             <button class="icon" onclick={playPrev} aria-label="Previous">
-              <svg width="24" height="24" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"/><path d="M14 3l-10 6 10 6V3z"/></svg>
+              <svg width="24" height="24" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"></rect><path d="M14 3l-10 6 10 6V3z"></path></svg>
             </button>
             <button class="icon play" onclick={togglePlay}>
               {#if isPlaying}
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"></rect><rect x="14" y="5" width="4" height="14" rx="1"></rect></svg>
               {:else}
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4l14 8-14 8V4z"/></svg>
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4l14 8-14 8V4z"></path></svg>
               {/if}
             </button>
             <button class="icon" onclick={playNext} aria-label="Next">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5l10 7-10 7V5z"/><rect x="17" y="5" width="4" height="14" rx="1"/></svg>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5l10 7-10 7V5z"></path><rect x="17" y="5" width="4" height="14" rx="1"></rect></svg>
             </button>
             <button class="icon sm" class:active={ws.repeat !== 'off'} onclick={toggleRepeat}>
               {#if ws.repeat === 'one'}
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"></path><path d="M13 5v3h-3"></path><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
               {:else}
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/></svg>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"></path><path d="M13 5v3h-3"></path></svg>
               {/if}
             </button>
           </div>
-          
+
           <div class="volume-container">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5.5v5h3l4 4v-13l-4 4H2z"/><path d="M11 4.5c.8.8 1.3 2 1.3 3.2s-.5 2.4-1.3 3.2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5.5v5h3l4 4v-13l-4 4H2z"></path><path d="M11 4.5c.8.8 1.3 2 1.3 3.2s-.5 2.4-1.3 3.2" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <input type="range" min="0" max="100" value={volume} onchange={setVolume} onclick={(e) => e.stopPropagation()} />
           </div>

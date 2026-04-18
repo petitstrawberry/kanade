@@ -500,6 +500,7 @@ impl App {
                 tracks: _,
                 current_index: _,
             } => {}
+            WsResponse::SignedUrls { .. } => {}
         }
     }
 

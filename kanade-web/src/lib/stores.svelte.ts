@@ -62,7 +62,6 @@ let mediaBase = $state(sameOriginMediaFallback);
 
 export const ws = new WsClient(
   buildWsUrl(resolveServerValue(initialSavedServer), sameOriginWsFallback),
-  sameOriginMediaFallback,
 );
 
 const player = new AudioPlayer(() => {});
@@ -129,11 +128,7 @@ export class ConnectionSettings {
 
 export const connectionSettings = new ConnectionSettings();
 
-export const browserNode = new BrowserNode(
-  player,
-  () => ws.mediaRequestsReady,
-  (listener) => ws.onMediaAuthChange(listener),
-);
+export const browserNode = new BrowserNode(player);
 
 export function getMediaBase(): string {
   return mediaBase;
@@ -141,14 +136,13 @@ export function getMediaBase(): string {
 
 export function updateMediaBase(newBase: string): string {
   mediaBase = normalizeUrl(newBase, sameOriginMediaFallback, httpScheme);
-  ws.updateMediaBase(mediaBase);
   return mediaBase;
 }
 
 function reconnectClients(savedServer: string | null): void {
   currentWsUrl = buildWsUrl(resolveServerValue(savedServer), sameOriginWsFallback);
   mediaBase = sameOriginMediaFallback;
-  ws.reconnectTo(currentWsUrl, mediaBase);
+  ws.reconnectTo(currentWsUrl);
   connectBrowserNode();
 }
 

@@ -1,24 +1,47 @@
-import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node, Track, RepeatMode } from './types';
-import { clearMediaSessionCookie, computeMediaSessionCookieValue, mediaBaseUsesCurrentHost, setMediaSessionCookie } from './media-auth';
+import type { ClientMessage, ServerMessage, WsCommand, WsRequest, Node, Track, RepeatMode } from './types';
 
 function emitWsToast(message: string) {
   window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
 }
 
+type ResponseMessage = Extract<ServerMessage, { type: 'response' }>;
+
+type PendingRequest = {
+  resolve: (val: ResponseMessage) => void;
+  reject: (err: unknown) => void;
+  timeoutId: number;
+};
+
+type SignedUrlCacheEntry = {
+  url: string;
+  expiresAt: number;
+};
+
+type PendingSignBatch = {
+  timerId: number;
+  paths: Set<string>;
+  resolvers: Array<{
+    resolve: (value: Map<string, string>) => void;
+    reject: (reason?: unknown) => void;
+  }>;
+};
+
+const SIGNED_URL_TTL_MS = 15 * 60 * 1000;
+const SIGN_URL_BATCH_WINDOW_MS = 50;
+
 export class WsClient {
   private ws: WebSocket | null = null;
   private url: string;
-  private mediaBaseUrl: string;
-  private fallbackUrl: string | null = null;
   private reqId = 0;
-  private pendingRequests = new Map<number, { resolve: (val: any) => void, reject: (err: any) => void }>();
+  private pendingRequests = new Map<number, PendingRequest>();
   private sendQueue: string[] = [];
   private reconnectTimeout: number | null = null;
   private connectTimeout: number | null = null;
   private heartbeatTimeout: number | null = null;
   private retryCount = 0;
   private active = false;
-  private mediaAuthListeners = new Set<(ready: boolean) => void>();
+  private signedUrlCache = new Map<string, SignedUrlCacheEntry>();
+  private pendingSignBatch: PendingSignBatch | null = null;
   private readonly connectTimeoutMs = 5000;
   private readonly heartbeatTimeoutMs = 45000;
 
@@ -29,9 +52,6 @@ export class WsClient {
   shuffle = $state(false);
   repeat = $state<RepeatMode>('off');
   connected = $state(false);
-  mediaAuthReady = $state(false);
-  mediaCookieCompatible = $state(true);
-  mediaRequestsReady = $state(false);
 
   private visibilityHandler = () => {
     if (document.visibilityState === 'visible' && !this.connected && this.active) {
@@ -43,12 +63,12 @@ export class WsClient {
   };
 
   private onlineHandler = () => {
-      if (this.active) this.scheduleReconnect();
+    if (this.active) this.scheduleReconnect();
   };
 
   private offlineHandler = () => {
     console.log('WS: network offline');
-    this.resetMediaAuth();
+    this.cancelPendingSignBatch(new Error('Disconnected'));
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();
@@ -60,20 +80,14 @@ export class WsClient {
     return this.selectedNodeId;
   }
 
-  constructor(url: string, mediaBaseUrl: string) {
+  constructor(url: string) {
     this.url = url;
-    this.mediaBaseUrl = mediaBaseUrl;
-    this.setMediaBaseUrl(mediaBaseUrl);
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
   }
 
-  updateMediaBase(mediaBaseUrl: string): void {
-    this.setMediaBaseUrl(mediaBaseUrl);
-  }
-
-  reconnectTo(url: string, mediaBaseUrl: string): void {
+  reconnectTo(url: string): void {
     this.url = url;
     this.reqId = 0;
     this.sendQueue.length = 0;
@@ -83,22 +97,10 @@ export class WsClient {
     this.currentIndex = null;
     this.shuffle = false;
     this.repeat = 'off';
-    this.setMediaBaseUrl(mediaBaseUrl);
-    this.resetMediaAuth();
+    this.signedUrlCache.clear();
+    this.cancelPendingSignBatch(new Error('Disconnected'));
     this.disconnect();
     this.connect();
-  }
-
-  onMediaAuthChange(listener: (ready: boolean) => void): () => void {
-    this.mediaAuthListeners.add(listener);
-    listener(this.mediaRequestsReady);
-    return () => {
-      this.mediaAuthListeners.delete(listener);
-    };
-  }
-
-  setFallbackUrl(url: string) {
-    this.fallbackUrl = url;
   }
 
   connect() {
@@ -134,13 +136,11 @@ export class WsClient {
           this.currentIndex = msg.state.current_index;
           this.shuffle = msg.state.shuffle;
           this.repeat = msg.state.repeat;
-        } else if (msg.type === 'media_auth') {
-          void this.handleMediaAuthMessage(msg, ws);
         } else if (msg.type === 'response') {
           const req = this.pendingRequests.get(msg.req_id);
           if (req) {
-            const variantData = Object.values(msg.data)[0];
-            req.resolve(variantData);
+            window.clearTimeout(req.timeoutId);
+            req.resolve(msg);
             this.pendingRequests.delete(msg.req_id);
           }
         }
@@ -155,17 +155,19 @@ export class WsClient {
       this.clearHeartbeat();
       this.ws = null;
       this.connected = false;
-      this.resetMediaAuth();
       this.sendQueue.length = 0;
+      this.cancelPendingSignBatch(new Error('Disconnected'));
       if (this.pendingRequests.size > 0) {
         const error = new Error('Disconnected');
         for (const [id, req] of this.pendingRequests.entries()) {
+          window.clearTimeout(req.timeoutId);
           req.reject(error);
           this.pendingRequests.delete(id);
         }
       }
       if (this.active) this.scheduleReconnect();
     };
+
     ws.onerror = (err) => {
       if (this.ws !== ws) return;
       this.clearConnectTimeout();
@@ -189,7 +191,7 @@ export class WsClient {
     const delay = this.retryCount === 0 ? 3000 : Math.min(1000 * Math.pow(2, this.retryCount), 5000);
     this.retryCount++;
     console.log(`Reconnecting in ${delay}ms...`);
-    
+
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = null;
       this.connect();
@@ -210,7 +212,7 @@ export class WsClient {
     this.clearConnectTimeout();
     this.clearReconnectTimeout();
     this.clearHeartbeat();
-    this.resetMediaAuth();
+    this.cancelPendingSignBatch(new Error('Disconnected'));
     if (this.ws) {
       this.ws.onopen = null;
       this.ws.onmessage = null;
@@ -223,6 +225,7 @@ export class WsClient {
     if (this.pendingRequests.size > 0) {
       const error = new Error('Disconnected');
       for (const [id, req] of this.pendingRequests.entries()) {
+        window.clearTimeout(req.timeoutId);
         req.reject(error);
         this.pendingRequests.delete(id);
       }
@@ -240,7 +243,6 @@ export class WsClient {
     this.clearHeartbeat();
     this.heartbeatTimeout = window.setTimeout(() => {
       console.warn('WS heartbeat timeout — no message received');
-      this.resetMediaAuth();
       if (this.ws) {
         this.ws.onclose = null;
         this.ws.close();
@@ -248,9 +250,11 @@ export class WsClient {
       }
       this.connected = false;
       this.sendQueue.length = 0;
+      this.cancelPendingSignBatch(new Error('Heartbeat timeout'));
       if (this.pendingRequests.size > 0) {
         const error = new Error('Heartbeat timeout');
         for (const [id, req] of this.pendingRequests.entries()) {
+          window.clearTimeout(req.timeoutId);
           req.reject(error);
           this.pendingRequests.delete(id);
         }
@@ -283,57 +287,123 @@ export class WsClient {
   sendRequest(req: WsRequest): Promise<any> {
     return new Promise((resolve, reject) => {
       const id = ++this.reqId;
-      this.pendingRequests.set(id, { resolve, reject });
-      
-      const msg: ClientMessage = { ...req, req_id: id };
-      this.sendRaw(JSON.stringify(msg));
-
-      setTimeout(() => {
+      const timeoutId = window.setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
           reject(new Error('Request timed out'));
         }
       }, 10000);
-    }) as Promise<WsResponse>;
+
+      this.pendingRequests.set(id, {
+        resolve: (message) => resolve(message.data),
+        reject,
+        timeoutId,
+      });
+
+      const msg: ClientMessage = { ...req, req_id: id };
+      this.sendRaw(JSON.stringify(msg));
+    });
   }
 
-  private async handleMediaAuthMessage(msg: Extract<ServerMessage, { type: 'media_auth' }>, ws: WebSocket): Promise<void> {
-    if (!this.mediaCookieCompatible) {
-      this.resetMediaAuth();
-      emitWsToast('Media auth requires the web UI and media server to use the same host.');
+  signUrls(paths: string[]): Promise<Map<string, string>> {
+    const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+    if (uniquePaths.length === 0) {
+      return Promise.resolve(new Map());
+    }
+
+    const now = Date.now();
+    const resolved = new Map<string, string>();
+    const missing: string[] = [];
+
+    for (const path of uniquePaths) {
+      const cached = this.signedUrlCache.get(path);
+      if (cached && cached.expiresAt > now) {
+        resolved.set(path, cached.url);
+      } else {
+        if (cached) this.signedUrlCache.delete(path);
+        missing.push(path);
+      }
+    }
+
+    if (missing.length === 0) {
+      return Promise.resolve(resolved);
+    }
+
+    return new Promise((resolve, reject) => {
+      const batch = this.pendingSignBatch ?? this.createPendingSignBatch();
+      for (const path of missing) {
+        batch.paths.add(path);
+      }
+      batch.resolvers.push({
+        resolve: (signedMap) => {
+          const merged = new Map<string, string>();
+          for (const path of uniquePaths) {
+            const signedUrl = resolved.get(path) ?? signedMap.get(path);
+            if (signedUrl) {
+              merged.set(path, signedUrl);
+            }
+          }
+          resolve(merged);
+        },
+        reject,
+      });
+    });
+  }
+
+  private createPendingSignBatch(): PendingSignBatch {
+    const batch: PendingSignBatch = {
+      timerId: window.setTimeout(() => {
+        void this.flushPendingSignBatch();
+      }, SIGN_URL_BATCH_WINDOW_MS),
+      paths: new Set(),
+      resolvers: [],
+    };
+    this.pendingSignBatch = batch;
+    return batch;
+  }
+
+  private async flushPendingSignBatch(): Promise<void> {
+    const batch = this.pendingSignBatch;
+    if (!batch) return;
+    this.pendingSignBatch = null;
+    window.clearTimeout(batch.timerId);
+
+    const paths = Array.from(batch.paths);
+    if (paths.length === 0) {
+      for (const resolver of batch.resolvers) {
+        resolver.resolve(new Map());
+      }
       return;
     }
 
     try {
-      const cookieValue = await computeMediaSessionCookieValue(msg.media_auth_key, msg.media_auth_key_id);
-      if (this.ws !== ws) return;
-      setMediaSessionCookie(cookieValue, this.mediaBaseUrl);
-      this.mediaAuthReady = true;
-      this.updateMediaRequestState();
-    } catch (err) {
-      this.resetMediaAuth();
-      console.error('Failed to initialize media auth cookie:', err);
+      const response = await this.sendRequest({ req: 'sign_urls', paths });
+      const signedUrlObject = response?.signed_urls ?? {};
+      const now = Date.now();
+      const signedMap = new Map<string, string>();
+
+      for (const [path, url] of Object.entries(signedUrlObject)) {
+        signedMap.set(path, url);
+        this.signedUrlCache.set(path, { url, expiresAt: now + SIGNED_URL_TTL_MS });
+      }
+
+      for (const resolver of batch.resolvers) {
+        resolver.resolve(signedMap);
+      }
+    } catch (error) {
+      for (const resolver of batch.resolvers) {
+        resolver.reject(error);
+      }
     }
   }
 
-  private resetMediaAuth() {
-    clearMediaSessionCookie(this.mediaBaseUrl);
-    this.mediaAuthReady = false;
-    this.updateMediaRequestState();
-  }
-
-  private setMediaBaseUrl(mediaBaseUrl: string): void {
-    this.mediaBaseUrl = mediaBaseUrl;
-    this.mediaCookieCompatible = mediaBaseUsesCurrentHost(mediaBaseUrl);
-    this.updateMediaRequestState();
-  }
-
-  private updateMediaRequestState() {
-    const nextReady = this.mediaCookieCompatible && this.mediaAuthReady;
-    if (this.mediaRequestsReady === nextReady) return;
-    this.mediaRequestsReady = nextReady;
-    for (const listener of this.mediaAuthListeners) {
-      listener(nextReady);
+  private cancelPendingSignBatch(error: Error): void {
+    const batch = this.pendingSignBatch;
+    if (!batch) return;
+    this.pendingSignBatch = null;
+    window.clearTimeout(batch.timerId);
+    for (const resolver of batch.resolvers) {
+      resolver.reject(error);
     }
   }
 }

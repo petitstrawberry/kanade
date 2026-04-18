@@ -20,7 +20,8 @@ futures-util = "0.3"
 lofty = { workspace = true }
 memchr = "2"
 uuid = { workspace = true }
-hmac = "0.12"
+hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 rand = "0.8"
+subtle = "2"

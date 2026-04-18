@@ -3,14 +3,14 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        ConnectInfo, Path, State,
+        ConnectInfo, OriginalUri, Path, Query, State,
     },
     http::{header, HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode},
     response::IntoResponse,
@@ -21,12 +21,16 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
+use hmac::{Hmac, KeyInit, Mac};
 use kanade_adapter_node_server::RemoteNodeOutput;
 use kanade_core::{controller::Core, model::Node};
 use kanade_db::Database;
 use kanade_node_protocol::NodeRegistration;
 use lofty::{prelude::*, probe::Probe};
 use rand::RngCore;
+use serde::Deserialize;
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
@@ -85,8 +89,19 @@ enum ArtResult {
     Embedded(String, Vec<u8>),
 }
 
+#[derive(Debug, Deserialize)]
+struct MediaAuthQuery {
+    kid: String,
+    exp: u64,
+    sig: String,
+}
+
 type WsSink = SplitSink<WebSocket, Message>;
 type WsStream = SplitStream<WebSocket>;
+
+type HmacSha256 = Hmac<Sha256>;
+
+const MEDIA_URL_TTL_SECS: u64 = 900;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -183,10 +198,13 @@ async fn handle_ws_connection(socket: WebSocket, state: Arc<AppState>, peer: Soc
 async fn media_track_handler(
     State(state): State<Arc<AppState>>,
     Path(track_id): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    Query(auth_query): Query<MediaAuthQuery>,
     headers: HeaderMap,
     method: Method,
 ) -> Response<Body> {
-    if let Err(status) = verify_media_auth(&state, &headers) {
+    let path = uri.path().to_owned();
+    if let Err(status) = verify_media_auth(&state, &path, &auth_query) {
         return body_response(status, Body::empty());
     }
 
@@ -216,14 +234,16 @@ async fn media_track_handler(
     .await
 }
 
-#[instrument(skip(state, headers))]
+#[instrument(skip(state))]
 async fn media_art_handler(
     State(state): State<Arc<AppState>>,
     Path(album_id): Path<String>,
-    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    Query(auth_query): Query<MediaAuthQuery>,
     method: Method,
 ) -> Response<Body> {
-    if let Err(status) = verify_media_auth(&state, &headers) {
+    let path = uri.path().to_owned();
+    if let Err(status) = verify_media_auth(&state, &path, &auth_query) {
         return body_response(status, Body::empty());
     }
 
@@ -295,10 +315,13 @@ async fn media_art_handler(
 async fn media_file_handler(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    Query(auth_query): Query<MediaAuthQuery>,
     headers: HeaderMap,
     method: Method,
 ) -> Response<Body> {
-    if let Err(status) = verify_media_auth(&state, &headers) {
+    let canonical_path = uri.path().to_owned();
+    if let Err(status) = verify_media_auth(&state, &canonical_path, &auth_query) {
         return body_response(status, Body::empty());
     }
 
@@ -326,7 +349,7 @@ async fn run_ui_mode(
 ) {
     let mut state_rx = state.broadcaster.subscribe();
     let mut local_node_id: Option<String> = None;
-    let (key_id, key) = state.media_key_store.generate();
+    let (key_id, _key) = state.media_key_store.generate();
     let snapshot = state.core.state_handle().read().await.clone();
     let node_summary = snapshot
         .nodes
@@ -343,7 +366,6 @@ async fn run_ui_mode(
         }
     }
     if let Ok(json) = serde_json::to_string(&ServerMessage::MediaAuth {
-        media_auth_key: hex::encode(key),
         media_auth_key_id: key_id.clone(),
     }) {
         if ws_tx.send(Message::Text(json.into())).await.is_err() {
@@ -357,7 +379,7 @@ async fn run_ui_mode(
     let mut last_seen = Instant::now();
 
     if let Some(msg) = first_message {
-        handle_ui_client_message(msg, peer, state, ws_tx, &mut local_node_id).await;
+        handle_ui_client_message(msg, peer, state, ws_tx, &mut local_node_id, &key_id).await;
     }
 
     loop {
@@ -382,7 +404,7 @@ async fn run_ui_mode(
                     Some(Ok(Message::Text(text))) => {
                         last_seen = Instant::now();
                         match serde_json::from_str::<ClientMessage>(&text) {
-                            Ok(msg) => handle_ui_client_message(msg, peer, state, ws_tx, &mut local_node_id).await,
+                            Ok(msg) => handle_ui_client_message(msg, peer, state, ws_tx, &mut local_node_id, &key_id).await,
                             Err(e) => warn!(peer = %peer, error = %e, "WS bad message"),
                         }
                     }
@@ -428,6 +450,7 @@ async fn handle_ui_client_message(
     state: &Arc<AppState>,
     ws_tx: &mut WsSink,
     local_node_id: &mut Option<String>,
+    media_auth_key_id: &str,
 ) {
     match msg {
         ClientMessage::Command(cmd) => {
@@ -435,7 +458,7 @@ async fn handle_ui_client_message(
         }
         ClientMessage::Request { req_id, req } => {
             info!(peer = %peer, request = ?req, "WS request");
-            let resp = handle_request(req, &state.core, &state.db_path).await;
+            let resp = handle_request(req, state, media_auth_key_id).await;
             let msg = ServerMessage::Response { req_id, data: resp };
             if let Ok(json) = serde_json::to_string(&msg) {
                 let _ = ws_tx.send(Message::Text(json.into())).await;
@@ -748,7 +771,10 @@ async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Optio
     }
 }
 
-async fn handle_request(req: WsRequest, core: &Core, db_path: &PathBuf) -> WsResponse {
+async fn handle_request(req: WsRequest, state: &AppState, media_auth_key_id: &str) -> WsResponse {
+    let core = &state.core;
+    let db_path = &state.db_path;
+
     match req {
         WsRequest::GetAlbums => {
             let path = db_path.clone();
@@ -860,6 +886,30 @@ async fn handle_request(req: WsRequest, core: &Core, db_path: &PathBuf) -> WsRes
                 tracks,
                 current_index: idx,
             }
+        }
+        WsRequest::SignUrls { paths } => {
+            let Some(key) = state.media_key_store.get(media_auth_key_id) else {
+                warn!(key_id = %media_auth_key_id, "media signing key missing for UI session");
+                return WsResponse::SignedUrls {
+                    urls: HashMap::new(),
+                };
+            };
+
+            let exp = current_unix_timestamp().saturating_add(MEDIA_URL_TTL_SECS);
+            let urls = paths
+                .into_iter()
+                .map(|path| {
+                    let url = build_signed_media_url(
+                        &state.media_base_url,
+                        &path,
+                        media_auth_key_id,
+                        &key,
+                        exp,
+                    );
+                    (path, url)
+                })
+                .collect();
+            WsResponse::SignedUrls { urls }
         }
     }
 }
@@ -987,28 +1037,60 @@ async fn serve_path_with_range(
     response
 }
 
-fn verify_media_auth(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    let cookie_header = headers.get(header::COOKIE).ok_or(StatusCode::FORBIDDEN)?;
-    let cookie_str = cookie_header.to_str().map_err(|_| StatusCode::FORBIDDEN)?;
+fn verify_media_auth(
+    state: &AppState,
+    path: &str,
+    auth_query: &MediaAuthQuery,
+) -> Result<(), StatusCode> {
+    let now = current_unix_timestamp();
+    if auth_query.exp < now {
+        return Err(StatusCode::FORBIDDEN);
+    }
 
-    let session_id = extract_cookie(cookie_str, "kanade_session").ok_or(StatusCode::FORBIDDEN)?;
+    let key = state
+        .media_key_store
+        .get(&auth_query.kid)
+        .ok_or(StatusCode::FORBIDDEN)?;
 
-    if state.media_key_store.get(session_id).is_some() {
+    let expected_sig = compute_media_signature(&key, path, auth_query.exp);
+    let provided_sig = hex::decode(&auth_query.sig).map_err(|_| StatusCode::FORBIDDEN)?;
+
+    if expected_sig.as_slice().ct_eq(provided_sig.as_slice()).into() {
         Ok(())
     } else {
         Err(StatusCode::FORBIDDEN)
     }
 }
 
-fn extract_cookie<'a>(cookie_str: &'a str, name: &str) -> Option<&'a str> {
-    let prefix = format!("{}=", name);
-    for pair in cookie_str.split(';') {
-        let trimmed = pair.trim();
-        if let Some(value) = trimmed.strip_prefix(&prefix) {
-            return Some(value);
-        }
-    }
-    None
+fn build_signed_media_url(
+    media_base_url: &str,
+    path: &str,
+    key_id: &str,
+    key: &[u8; 32],
+    exp: u64,
+) -> String {
+    let sig = hex::encode(compute_media_signature(key, path, exp));
+    format!(
+        "{}{}?kid={}&exp={}&sig={}",
+        media_base_url.trim_end_matches('/'),
+        path,
+        key_id,
+        exp,
+        sig
+    )
+}
+
+fn compute_media_signature(key: &[u8; 32], path: &str, exp: u64) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(key).expect("32-byte HMAC key should be valid");
+    mac.update(format!("GET:{path}:{exp}").as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn bytes_response(

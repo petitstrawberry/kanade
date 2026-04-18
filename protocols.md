@@ -65,6 +65,8 @@ receive a random UUID.
 | --------------- | ------ | -------------------------------------------------- |
 | node_id         | string | Server-assigned node identifier                     |
 | media_base_url  | string | HTTP base URL for constructing track URIs          |
+| media_auth_key  | string? | Hex-encoded HMAC signing key (nodes only, for client-side URL signing) |
+| media_auth_key_id | string? | UUID key identifier (nodes only) |
 
 ### 1.3 NodeCommand (Server → Node)
 
@@ -195,6 +197,7 @@ Tagged with `"req"` and `"req_id"`. The server replies with a matching `req_id`.
 | `get_genre_tracks`  | `genre`                | `genre_tracks`    |
 | `search`            | `query`                | `search_results`  |
 | `get_queue`         | —                      | `queue`           |
+| `sign_urls`         | `paths: [string]`      | `signed_urls`     |
 
 ### 2.3 Server → Client Messages
 
@@ -240,6 +243,7 @@ Replies to request messages. The `data` field contains the response variant.
 | `genre_tracks`     | `{ "tracks": [Track] }`                     |
 | `search_results`   | `{ "tracks": [Track] }`                     |
 | `queue`            | `{ "tracks": [Track], "current_index": usize? }` |
+| `signed_urls`      | `{ "urls": { string: string } }` |
 
 ---
 
@@ -250,39 +254,65 @@ stable IDs backed by the library database.
 
 **Server endpoint**: Unified with WS on `BIND_ADDR` (default `http://HOST:8080`)
 
-### 3.0 Authentication (Session Cookie)
+### 3.0 Authentication (Signed URLs)
 
-All `/media/*` requests require a valid session cookie. The server generates a per-client session token when a WebSocket connection is established and stores it in an in-memory key store.
+All `/media/*` requests require a valid signed URL. The server generates a per-session HMAC-SHA256 key when a WebSocket connection is established. Signing keys never leave the server — clients request signed URLs from the server over the WebSocket connection.
 
 **Session lifecycle:**
-1. Client connects via `/ws` (mTLS or direct)
-2. Server generates a unique session token (UUID)
-3. Server sends `{"type":"media_auth","media_auth_key":"<hex>","media_auth_key_id":"<uuid>"}` to the client
-4. Client sets `kanade_session=<uuid>` cookie via `HTTPCookieStorage` (Secure, Path=/media)
-5. AVPlayer and URLSession automatically include the cookie on `/media/*` requests
-6. Server validates the cookie against the key store
-7. On WebSocket disconnect, the session token is revoked
+1. Client connects via `/ws`
+2. Server generates a per-session HMAC-SHA256 key (32 bytes) with a UUID key identifier
+3. Server sends `{"type":"media_auth","media_auth_key_id":"<uuid>"}` to the client (key stays server-side)
+4. Client requests signed URLs via the `sign_urls` WS request
+5. Server returns fully signed URLs with embedded expiry and HMAC signature
+6. Client uses signed URLs directly in `<img>`, `<audio>`, or HTTP requests
+7. On WebSocket disconnect, the signing key is revoked
 
-**Cookie properties:**
-- Name: `kanade_session`
-- Value: session token (UUID)
-- Path: `/media`
-- Secure: yes
-- HttpOnly: no (required so the app can manage it)
-
-**Request format:**
+**Signed URL format:**
 ```
-GET /media/tracks/<track_id> HTTP/1.1
-Host: HOST:8080
-Cookie: kanade_session=<uuid>
-Range: bytes=0-1023  (optional)
+/media/<path>?kid=<key_id>&exp=<unix_timestamp>&sig=<hmac_hex>
 ```
 
-**Verification:**
-- Extract `kanade_session` from Cookie header
-- Look up session token in key store
-- If not found → HTTP 403
-- No expiry on cookie itself — validity is tied to the WebSocket session
+| Param | Description |
+|-------|-------------|
+| `kid` | UUID key identifier (tells server which key to use) |
+| `exp` | Unix timestamp expiry (15 minutes from signing) |
+| `sig` | HMAC-SHA256 signature hex-encoded |
+
+**Signing algorithm:**
+```
+message = "GET:{path}:{exp}"
+signature = HMAC-SHA256(key_bytes, message)
+```
+
+**Requesting signed URLs (client → server):**
+```json
+{ "req_id": 1, "req": "sign_urls", "paths": ["/media/art/abc123", "/media/tracks/def456"] }
+```
+
+**Response (server → client):**
+```json
+{ "type": "response", "req_id": 1, "data": { "signed_urls": {
+  "/media/art/abc123": "https://host/media/art/abc123?kid=uuid&exp=1234567890&sig=hex",
+  "/media/tracks/def456": "https://host/media/tracks/def456?kid=uuid&exp=1234567890&sig=hex"
+}}}
+```
+
+**Verification (server-side):**
+1. Extract `kid`, `exp`, `sig` from query parameters
+2. Reject if `exp` is in the past
+3. Look up key bytes by `kid` in the key store
+4. Compute `HMAC-SHA256(key, "GET:{path}:{exp}")`
+5. Constant-time compare with provided `sig`
+6. If mismatch → HTTP 403
+
+**Security properties:**
+- Signing keys are never exposed to clients
+- URLs expire after 15 minutes
+- Per-session keys, revoked on WebSocket disconnect
+- Constant-time signature comparison prevents timing attacks
+- `Referrer-Policy: no-referrer` on all media elements prevents URL leakage via Referer headers
+
+**Node connections** receive the raw signing key (`media_auth_key`) in their registration ack and sign URLs client-side, since nodes construct media URLs independently without a persistent request/response channel.
 
 ### 3.1 Request Format
 

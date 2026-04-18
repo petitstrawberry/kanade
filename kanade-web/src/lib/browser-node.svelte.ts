@@ -1,7 +1,7 @@
 import { AudioPlayer } from './audio-player';
 import type { PlayerState } from './audio-player';
 import { buildMediaUrl } from './media-auth';
-import { updateMediaBase } from './stores';
+import { updateMediaBase, ws as uiWs } from './stores';
 
 function emitWsToast(message: string) {
   window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
@@ -68,8 +68,6 @@ function isNodeCommand(value: unknown): value is NodeCommand {
 
 export class BrowserNode {
   private readonly player: AudioPlayer;
-  private readonly isMediaReady: () => boolean;
-  private readonly unsubscribeMediaAuth: () => void;
   private ws: WebSocket | null = null;
   private wsUrl: string | null = null;
   private name: string | null = null;
@@ -85,7 +83,6 @@ export class BrowserNode {
   private heartbeatTimeoutId: number | null = null;
   private stateIntervalId: number | null = null;
   private lastSentStateKey: string | null = null;
-  private pendingCommands: NodeCommand[] = [];
 
   connected = $state(false);
 
@@ -118,18 +115,8 @@ export class BrowserNode {
     this.closeSocket();
   };
 
-  constructor(
-    player: AudioPlayer,
-    isMediaReady: () => boolean,
-    onMediaAuthChange: (listener: (ready: boolean) => void) => () => void,
-  ) {
+  constructor(player: AudioPlayer) {
     this.player = player;
-    this.isMediaReady = isMediaReady;
-    this.unsubscribeMediaAuth = onMediaAuthChange((ready) => {
-      if (ready) {
-        this.flushPendingCommands();
-      }
-    });
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
@@ -172,7 +159,6 @@ export class BrowserNode {
 
   destroy(): void {
     this.disconnect();
-    this.unsubscribeMediaAuth();
     document.removeEventListener('visibilitychange', this.visibilityHandler);
     window.removeEventListener('online', this.onlineHandler);
     window.removeEventListener('offline', this.offlineHandler);
@@ -186,9 +172,33 @@ export class BrowserNode {
     return this.logicalNodeId;
   }
 
-  private toHttpUrl(filePath: string): string {
-    if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
-    return buildMediaUrl(this.mediaBaseUrl!, `/media/file/${encodeURIComponent(filePath)}`);
+  private async signPaths(filePaths: string[]): Promise<string[]> {
+    const mediaBaseUrl = this.mediaBaseUrl;
+    if (!mediaBaseUrl) {
+      return filePaths;
+    }
+
+    const mediaPaths = filePaths.map((filePath) =>
+      filePath.startsWith('http://') || filePath.startsWith('https://')
+        ? filePath
+        : `/media/file/${encodeURIComponent(filePath)}`,
+    );
+
+    const signablePaths = mediaPaths.filter((path) => path.startsWith('/media/file/'));
+    let signed = new Map<string, string>();
+
+    if (signablePaths.length > 0) {
+      try {
+        signed = await uiWs.signUrls(signablePaths);
+      } catch {
+        signed = new Map();
+      }
+    }
+
+    return mediaPaths.map((path) => {
+      if (path.startsWith('http://') || path.startsWith('https://')) return path;
+      return signed.get(path) ?? buildMediaUrl(mediaBaseUrl, path);
+    });
   }
 
   private openSocket(): void {
@@ -305,7 +315,6 @@ export class BrowserNode {
       updateMediaBase(msg.media_base_url);
       this.clearRegistrationTimeout();
       this.startStateUpdates();
-      this.flushPendingCommands();
       console.log(`BrowserNode registered: ${this.nodeId}`);
       console.log(`BrowserNode media base URL: ${this.mediaBaseUrl}`);
       return;
@@ -320,15 +329,10 @@ export class BrowserNode {
   }
 
   private handleCommand(command: NodeCommand): void {
-    if (!this.isMediaReady()) {
-      this.pendingCommands.push(structuredClone(command));
-      return;
-    }
-
-    this.handleReadyCommand(command);
+    void this.handleReadyCommand(command);
   }
 
-  private handleReadyCommand(command: NodeCommand): void {
+  private async handleReadyCommand(command: NodeCommand): Promise<void> {
     console.log('BrowserNode command', command);
     switch (command.type) {
       case 'play':
@@ -346,12 +350,16 @@ export class BrowserNode {
       case 'set_volume':
         this.safePlayerCall(() => this.player.setVolume(command.volume));
         break;
-      case 'set_queue':
-        this.safePlayerCall(() => this.player.setQueue(command.file_paths.map(p => this.toHttpUrl(p)), command.projection_generation));
+      case 'set_queue': {
+        const signedPaths = await this.signPaths(command.file_paths);
+        this.safePlayerCall(() => this.player.setQueue(signedPaths, command.projection_generation));
         break;
-      case 'add':
-        this.safePlayerCall(() => this.player.addTracks(command.file_paths.map(p => this.toHttpUrl(p))));
+      }
+      case 'add': {
+        const signedPaths = await this.signPaths(command.file_paths);
+        this.safePlayerCall(() => this.player.addTracks(signedPaths));
         break;
+      }
       case 'remove':
         this.safePlayerCall(() => this.player.removeTrack(command.index));
         break;
@@ -483,19 +491,6 @@ export class BrowserNode {
     this.nodeId = null;
     this.mediaBaseUrl = null;
     this.lastSentStateKey = null;
-    this.pendingCommands = [];
-  }
-
-  private flushPendingCommands(): void {
-    if (!this.mediaBaseUrl || !this.isMediaReady()) return;
-
-    if (this.pendingCommands.length > 0) {
-      const pendingCommands = [...this.pendingCommands];
-      this.pendingCommands = [];
-      for (const command of pendingCommands) {
-        this.handleReadyCommand(command);
-      }
-    }
   }
 
   private closeSocket(): void {

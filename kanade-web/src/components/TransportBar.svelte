@@ -1,18 +1,40 @@
 <script lang="ts">
   import { ws } from '../lib/stores';
-  import { getMediaBase } from '../lib/stores';
   import { formatDuration } from '../lib/format';
-  import { buildMediaUrl } from '../lib/media-auth';
   import NodePicker from './NodePicker.svelte';
 
   let { onOpenNowPlaying }: { onOpenNowPlaying: () => void } = $props();
 
   let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
   let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
-  let mediaBase = $derived(getMediaBase());
-  let artworkUrl = $derived(currentTrack?.album_id && ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${currentTrack.album_id}`) : null);
+  let artworkUrl = $state<string | null>(null);
   let artworkError = $state(false);
-  $effect(() => { artworkUrl; artworkError = false; });
+
+  $effect(() => {
+    const albumId = currentTrack?.album_id;
+    artworkError = false;
+    if (!albumId) {
+      artworkUrl = null;
+      return;
+    }
+
+    const path = `/media/art/${albumId}`;
+    let cancelled = false;
+    ws.signUrls([path]).then((map) => {
+      if (!cancelled) {
+        artworkUrl = map.get(path) ?? null;
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        artworkUrl = null;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
   let isPlaying = $derived(node?.status === 'playing');
   let position = $derived(node?.position_secs ?? 0);
   let duration = $derived(currentTrack?.duration_secs ?? 0);
@@ -76,10 +98,10 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="track-info" onclick={() => onOpenNowPlaying()}>
         {#if artworkUrl && !artworkError}
-          <img src={artworkUrl} alt="" class="artwork" onerror={() => (artworkError = true)} />
+          <img src={artworkUrl} alt="" class="artwork" referrerpolicy="no-referrer" onerror={() => (artworkError = true)} />
         {:else}
           <div class="artwork artwork-placeholder">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
           </div>
         {/if}
         <div class="meta">
@@ -92,9 +114,9 @@
         </div>
         <button class="mobile-play" onclick={(e) => { e.stopPropagation(); togglePlay(); }}>
           {#if isPlaying}
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="4" height="16" rx="1"/><rect x="15" y="4" width="4" height="16" rx="1"/></svg>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="4" height="16" rx="1"></rect><rect x="15" y="4" width="4" height="16" rx="1"></rect></svg>
           {:else}
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3l16 9-16 9V3z"/></svg>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3l16 9-16 9V3z"></path></svg>
           {/if}
         </button>
       </div>
@@ -104,26 +126,26 @@
   <div class="center-col">
     <div class="controls">
       <button class="btn ic-small {ws.shuffle ? 'active' : ''}" onclick={toggleShuffle} aria-label="Shuffle">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"></path><path d="M10 2l-4 4 4 4"></path></svg>
       </button>
       <button class="btn ic-small" onclick={playPrev} aria-label="Previous">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"/><path d="M14 3l-10 6 10 6V3z"/></svg>
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"></rect><path d="M14 3l-10 6 10 6V3z"></path></svg>
       </button>
       <button class="btn ic-large" onclick={togglePlay}>
         {#if isPlaying}
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="4" height="16" rx="1"/><rect x="15" y="4" width="4" height="16" rx="1"/></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="4" height="16" rx="1"></rect><rect x="15" y="4" width="4" height="16" rx="1"></rect></svg>
         {:else}
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3l16 9-16 9V3z"/></svg>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3l16 9-16 9V3z"></path></svg>
         {/if}
       </button>
       <button class="btn ic-small" onclick={playNext} aria-label="Next">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><path d="M4 3l10 6-10 6V3z"/><rect x="14" y="3" width="3" height="12" rx="1"/></svg>
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><path d="M4 3l10 6-10 6V3z"></path><rect x="14" y="3" width="3" height="12" rx="1"></rect></svg>
       </button>
       <button class="btn ic-small {ws.repeat !== 'off' ? 'active' : ''}" onclick={toggleRepeat}>
         {#if ws.repeat === 'one'}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"></path><path d="M13 5v3h-3"></path><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
         {:else}
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"/><path d="M13 5v3h-3"/></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"></path><path d="M13 5v3h-3"></path></svg>
         {/if}
       </button>
     </div>
@@ -148,7 +170,7 @@
         <button class="vol-btn" onclick={() => adjustVolume(1)}>+</button>
       </div>
       <div class="volume-control">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5.5v5h3l4 4v-13l-4 4H2z"/><path d="M11 4.5c.8.8 1.3 2 1.3 3.2s-.5 2.4-1.3 3.2" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 5.5v5h3l4 4v-13l-4 4H2z"></path><path d="M11 4.5c.8.8 1.3 2 1.3 3.2s-.5 2.4-1.3 3.2" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>
         <input type="range" class="volume-slider" min="0" max="100" value={volume} onchange={setVolume} />
       </div>
       <NodePicker />

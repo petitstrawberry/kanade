@@ -2,8 +2,6 @@
   import { ws, showToast } from '../lib/stores';
   import type { Album, Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
-  import { getMediaBase } from '../lib/stores';
-  import { buildMediaUrl } from '../lib/media-auth';
   import { tick } from 'svelte';
 
   type Mode = 'albums' | 'artists' | 'genres';
@@ -11,7 +9,6 @@
   let sizeIndex = $state(parseInt(localStorage.getItem('kanade-artwork-size-idx') || '1'));
   const sizePresets = [120, 180, 260, 360];
   let artworkSize = $derived(sizePresets[sizeIndex]);
-  let mediaBase = $derived(getMediaBase());
   $effect(() => { localStorage.setItem('kanade-artwork-size-idx', String(sizeIndex)); });
 
   const scrollStore = new Map<string, number>();
@@ -28,6 +25,10 @@
   let selectedAlbum = $state<Album | null>(null);
 
   let currentTracks = $state<Track[]>([]);
+  let albumArtworkUrls = $state<Record<string, string>>({});
+  let albumArtworkErrors = $state<Record<string, boolean>>({});
+  let selectedAlbumArtworkUrl = $state<string | null>(null);
+  let selectedAlbumArtworkError = $state(false);
 
   const hasMultipleDiscs = $derived(
     new Set(currentTracks.map(t => t.disc_number ?? 0)).size > 1
@@ -45,6 +46,65 @@
     tick().then(() => {
       if (viewEl) viewEl.scrollTop = scrollStore.get(viewKey) ?? 0;
     });
+  });
+
+  $effect(() => {
+    if (selectedAlbum) return;
+
+    const albumIds = albums.map((album) => album.id);
+    if (albumIds.length === 0) {
+      albumArtworkUrls = {};
+      albumArtworkErrors = {};
+      return;
+    }
+
+    const paths = albumIds.map((albumId) => `/media/art/${albumId}`);
+    let cancelled = false;
+
+    ws.signUrls(paths).then((signed) => {
+      if (cancelled) return;
+      const nextUrls: Record<string, string> = {};
+      for (const albumId of albumIds) {
+        const path = `/media/art/${albumId}`;
+        const signedUrl = signed.get(path);
+        if (signedUrl) nextUrls[albumId] = signedUrl;
+      }
+      albumArtworkUrls = nextUrls;
+      albumArtworkErrors = {};
+    }).catch(() => {
+      if (!cancelled) {
+        albumArtworkUrls = {};
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
+    const albumId = selectedAlbum?.id;
+    selectedAlbumArtworkError = false;
+    if (!albumId) {
+      selectedAlbumArtworkUrl = null;
+      return;
+    }
+
+    const path = `/media/art/${albumId}`;
+    let cancelled = false;
+    ws.signUrls([path]).then((signed) => {
+      if (!cancelled) {
+        selectedAlbumArtworkUrl = signed.get(path) ?? null;
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        selectedAlbumArtworkUrl = null;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   });
 
   function saveScroll() {
@@ -168,6 +228,10 @@
   function playAlbumNow() {
     ws.sendCommand({ cmd: 'replace_and_play', tracks: currentTracks, index: 0 });
   }
+
+  function markAlbumArtworkError(albumId: string) {
+    albumArtworkErrors = { ...albumArtworkErrors, [albumId]: true };
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -225,16 +289,18 @@
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div class="album-cover" onclick={() => selectAlbum(album)}>
-                      <img
-                         src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${album.id}`) : PLACEHOLDER_SVG}
-                        alt={album.title || 'Album'}
-                        onerror={(e: Event) => {
-                          const img = e.target as HTMLImageElement;
-                          if (!img.dataset.fallback) {
-                            img.dataset.fallback = '1';
-                            img.src = PLACEHOLDER_SVG;
-                          }
-                        }}
+                       <img
+                         src={!albumArtworkErrors[album.id] && albumArtworkUrls[album.id] ? albumArtworkUrls[album.id] : PLACEHOLDER_SVG}
+                         alt={album.title || 'Album'}
+                         referrerpolicy="no-referrer"
+                         onerror={(e: Event) => {
+                           const img = e.target as HTMLImageElement;
+                           if (!img.dataset.fallback) {
+                             img.dataset.fallback = '1';
+                             markAlbumArtworkError(album.id);
+                             img.src = PLACEHOLDER_SVG;
+                           }
+                         }}
                       />
                       <div class="play-overlay">
                         <button class="add-btn" onclick={(e) => { e.stopPropagation(); addAlbumTracksToQueue(album.id); }}>+</button>
@@ -253,14 +319,16 @@
         <!-- Tracks View -->
         <div class="tracks-pane">
           <div class="tracks-header">
-            <img
+             <img
               class="album-art"
-               src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${selectedAlbum.id}`) : PLACEHOLDER_SVG}
+               src={!selectedAlbumArtworkError && selectedAlbumArtworkUrl ? selectedAlbumArtworkUrl : PLACEHOLDER_SVG}
               alt=""
+              referrerpolicy="no-referrer"
               onerror={(e: Event) => {
                 const img = e.target as HTMLImageElement;
                 if (!img.dataset.fallback) {
                   img.dataset.fallback = '1';
+                  selectedAlbumArtworkError = true;
                   img.src = PLACEHOLDER_SVG;
                 }
               }}

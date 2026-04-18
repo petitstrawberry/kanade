@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use kanade_core::model::{Album, RepeatMode, Track};
@@ -82,6 +84,7 @@ pub enum WsRequest {
     GetGenreTracks { genre: String },
     Search { query: String },
     GetQueue,
+    SignUrls { paths: Vec<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +94,6 @@ pub enum ServerMessage {
         state: kanade_core::state::PlaybackState,
     },
     MediaAuth {
-        media_auth_key: String,
         media_auth_key_id: String,
     },
     Response {
@@ -137,6 +139,9 @@ pub enum WsResponse {
     Queue {
         tracks: Vec<Track>,
         current_index: Option<usize>,
+    },
+    SignedUrls {
+        urls: HashMap<String, String>,
     },
 }
 

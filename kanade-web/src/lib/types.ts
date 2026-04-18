@@ -74,7 +74,8 @@ export type WsRequest =
   | { req: "get_genre_albums"; genre: string }
   | { req: "get_genre_tracks"; genre: string }
   | { req: "search"; query: string }
-  | { req: "get_queue" };
+  | { req: "get_queue" }
+  | { req: "sign_urls"; paths: string[] };
 
 export type ClientMessage =
   | WsCommand
@@ -95,4 +96,5 @@ export type WsResponse =
   | { genre_albums: Album[] }
   | { genre_tracks: Track[] }
   | { search_results: Track[] }
-  | { queue: { tracks: Track[]; current_index: number | null } };
+  | { queue: { tracks: Track[]; current_index: number | null } }
+  | { signed_urls: Record<string, string> };
