@@ -46,7 +46,7 @@ export async function computeMediaSessionCookieValue(mediaAuthKeyHex: string, me
 }
 
 export function setMediaSessionCookie(cookieValue: string): void {
-  document.cookie = `${MEDIA_SESSION_COOKIE_NAME}=${encodeURIComponent(cookieValue)}; path=/; SameSite=Lax`;
+  document.cookie = `${MEDIA_SESSION_COOKIE_NAME}=${cookieValue}; path=/; SameSite=Lax`;
 }
 
 export function clearMediaSessionCookie(): void {

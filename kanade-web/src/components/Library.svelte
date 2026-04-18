@@ -2,7 +2,7 @@
   import { ws, showToast } from '../lib/stores';
   import type { Album, Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
-  import { mediaBase } from '../lib/stores';
+  import { getMediaBase } from '../lib/stores';
   import { buildMediaUrl } from '../lib/media-auth';
   import { tick } from 'svelte';
 
@@ -11,6 +11,7 @@
   let sizeIndex = $state(parseInt(localStorage.getItem('kanade-artwork-size-idx') || '1'));
   const sizePresets = [120, 180, 260, 360];
   let artworkSize = $derived(sizePresets[sizeIndex]);
+  let mediaBase = $derived(getMediaBase());
   $effect(() => { localStorage.setItem('kanade-artwork-size-idx', String(sizeIndex)); });
 
   const scrollStore = new Map<string, number>();
@@ -225,7 +226,7 @@
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div class="album-cover" onclick={() => selectAlbum(album)}>
                       <img
-                        src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${album.id}`) : PLACEHOLDER_SVG}
+                         src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${album.id}`) : PLACEHOLDER_SVG}
                         alt={album.title || 'Album'}
                         onerror={(e: Event) => {
                           const img = e.target as HTMLImageElement;
@@ -254,7 +255,7 @@
           <div class="tracks-header">
             <img
               class="album-art"
-              src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${selectedAlbum.id}`) : PLACEHOLDER_SVG}
+               src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${selectedAlbum.id}`) : PLACEHOLDER_SVG}
               alt=""
               onerror={(e: Event) => {
                 const img = e.target as HTMLImageElement;

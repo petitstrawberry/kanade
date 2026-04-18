@@ -12,7 +12,7 @@ services:
       MUSIC_DIR: /music
       DB_PATH: /data/kanade.db
       BIND_ADDR: "0.0.0.0:8080"
-      SERVER_HOST: "${SERVER_HOST:-}"
+      PUBLIC_HOST: "${PUBLIC_HOST:-}"
       OH_ADDR: "0.0.0.0:8090"
       SCAN_INTERVAL_SECS: "${SCAN_INTERVAL_SECS:-300}"
       RUST_LOG: "${RUST_LOG:-kanade=info,kanade_core=debug}"

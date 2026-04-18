@@ -61,11 +61,30 @@ export class WsClient {
 
   constructor(url: string, mediaBaseUrl: string) {
     this.url = url;
-    this.mediaCookieCompatible = mediaBaseUsesCurrentHost(mediaBaseUrl);
-    this.updateMediaRequestState();
+    this.setMediaBaseUrl(mediaBaseUrl);
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
+  }
+
+  updateMediaBase(mediaBaseUrl: string): void {
+    this.setMediaBaseUrl(mediaBaseUrl);
+  }
+
+  reconnectTo(url: string, mediaBaseUrl: string): void {
+    this.url = url;
+    this.reqId = 0;
+    this.sendQueue.length = 0;
+    this.nodes = [];
+    this.selectedNodeId = null;
+    this.queue = [];
+    this.currentIndex = null;
+    this.shuffle = false;
+    this.repeat = 'off';
+    this.setMediaBaseUrl(mediaBaseUrl);
+    this.resetMediaAuth();
+    this.disconnect();
+    this.connect();
   }
 
   onMediaAuthChange(listener: (ready: boolean) => void): () => void {
@@ -298,6 +317,11 @@ export class WsClient {
   private resetMediaAuth() {
     clearMediaSessionCookie();
     this.mediaAuthReady = false;
+    this.updateMediaRequestState();
+  }
+
+  private setMediaBaseUrl(mediaBaseUrl: string): void {
+    this.mediaCookieCompatible = mediaBaseUsesCurrentHost(mediaBaseUrl);
     this.updateMediaRequestState();
   }
 

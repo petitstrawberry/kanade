@@ -1,6 +1,7 @@
 import { AudioPlayer } from './audio-player';
 import type { PlayerState } from './audio-player';
 import { buildMediaUrl } from './media-auth';
+import { updateMediaBase } from './stores';
 
 function emitWsToast(message: string) {
   window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
@@ -85,6 +86,8 @@ export class BrowserNode {
   private stateIntervalId: number | null = null;
   private lastSentStateKey: string | null = null;
   private pendingCommands: NodeCommand[] = [];
+
+  connected = $state(false);
 
   private readonly baseDelayMs = 1000;
   private readonly maxDelayMs = 5000;
@@ -295,9 +298,11 @@ export class BrowserNode {
       }
 
       this.registered = true;
+      this.connected = true;
       this.retryCount = 0;
       this.nodeId = msg.node_id;
       this.mediaBaseUrl = msg.media_base_url;
+      updateMediaBase(msg.media_base_url);
       this.clearRegistrationTimeout();
       this.startStateUpdates();
       this.flushPendingCommands();
@@ -474,6 +479,7 @@ export class BrowserNode {
     this.clearHeartbeat();
     this.clearStateInterval();
     this.registered = false;
+    this.connected = false;
     this.nodeId = null;
     this.mediaBaseUrl = null;
     this.lastSentStateKey = null;

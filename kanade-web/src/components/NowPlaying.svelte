@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly, fade } from 'svelte/transition';
-  import { ws, mediaBase } from '../lib/stores';
+  import { ws } from '../lib/stores';
+  import { getMediaBase } from '../lib/stores';
   import { formatSampleRate, formatDuration } from '../lib/format';
   import { buildMediaUrl } from '../lib/media-auth';
   import NodePicker from './NodePicker.svelte';
@@ -10,6 +11,7 @@
 
   let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
   let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
+  let mediaBase = $derived(getMediaBase());
   let artworkUrl = $derived(currentTrack?.album_id && ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${currentTrack.album_id}`) : null);
   let artworkError = $state(false);
   $effect(() => { artworkUrl; artworkError = false; });

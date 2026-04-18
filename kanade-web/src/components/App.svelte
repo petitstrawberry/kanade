@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { ws, browserNode, connectBrowserNode, ActiveTab, toasts, showToast } from '../lib/stores';
+  import { ws, connectBrowserNode, ActiveTab, connectionSettings, toasts, showToast } from '../lib/stores';
   import TransportBar from './TransportBar.svelte';
   import NowPlaying from './NowPlaying.svelte';
   import Library from './Library.svelte';
   import Queue from './Queue.svelte';
   import Search from './Search.svelte';
+  import Settings from './Settings.svelte';
 
   const activeTab = new ActiveTab();
   let tab = $derived(activeTab.value);
@@ -45,6 +46,7 @@
       } else if (e.key === '1') activeTab.value = 'library';
       else if (e.key === '2') activeTab.value = 'queue';
       else if (e.key === '3') activeTab.value = 'search';
+      else if (e.key === ',') connectionSettings.openPanel();
       else if (e.key === 'Escape' && showNowPlaying) showNowPlaying = false;
     };
 
@@ -75,6 +77,11 @@
     <button class:active={tab === 'search'} onclick={() => activeTab.value = 'search'}>
       Search
     </button>
+
+    <button class="settings-link" onclick={() => connectionSettings.openPanel()} aria-label="Open settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
   </nav>
 
   <main class="content">
@@ -88,6 +95,7 @@
   </div>
 
   <NowPlaying visible={showNowPlaying} onClose={() => showNowPlaying = false} />
+  <Settings />
 
   <nav class="bottom-tab-bar">
     <button class:active={tab === 'library'} onclick={() => activeTab.value = 'library'}>
@@ -101,6 +109,10 @@
     <button class:active={tab === 'search'} onclick={() => activeTab.value = 'search'}>
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <span>Search</span>
+    </button>
+    <button onclick={() => connectionSettings.openPanel()} aria-label="Open settings">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span>Settings</span>
     </button>
   </nav>
 
@@ -176,6 +188,13 @@
     background-color: var(--accent);
     color: var(--bg);
     font-weight: 500;
+  }
+
+  .settings-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: auto;
   }
 
   .content {

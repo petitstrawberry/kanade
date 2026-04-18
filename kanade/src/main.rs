@@ -39,12 +39,19 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
 
-    let server_host = std::env::var("SERVER_HOST").ok();
-    let media_public_base_url =
-        std::env::var("MEDIA_PUBLIC_BASE_URL").unwrap_or_else(|_| match &server_host {
-            Some(host) => format!("http://{}:{}", host, bind_addr.port()),
-            None => format!("http://127.0.0.1:{}", bind_addr.port()),
-        });
+    let public_host = std::env::var("PUBLIC_HOST").ok();
+    let media_public_base_url = match &public_host {
+        Some(host) => {
+            if host.starts_with("http://") || host.starts_with("https://") {
+                host.clone()
+            } else if host.contains(':') {
+                format!("http://{}", host)
+            } else {
+                format!("https://{}", host)
+            }
+        }
+        None => format!("http://127.0.0.1:{}", bind_addr.port()),
+    };
 
     let (ws_broadcaster, _ws_rx) = WsBroadcaster::new(64);
     let oh_broadcaster = OpenHomeBroadcaster::new();
@@ -219,7 +226,7 @@ async fn main() -> Result<()> {
                 ("version", "1.0".to_string()),
                 ("ws_port", bind_addr.port().to_string()),
             ];
-            if let Some(host) = &server_host {
+            if let Some(host) = &public_host {
                 properties.push(("host", host.clone()));
             }
             match mdns_sd::ServiceInfo::new(

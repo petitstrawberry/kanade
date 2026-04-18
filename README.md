@@ -110,11 +110,22 @@ direnv allow   # or: nix develop
 | `MUSIC_DIR`             | —                              | Root music directory for scanning      |
 | `DB_PATH`               | `kanade.db`                    | SQLite database file path              |
 | `SCAN_INTERVAL_SECS`    | `300`                          | Interval between periodic scans        |
-| `SERVER_HOST`           | —                              | Public hostname (mDNS advertisement + media URL fallback) |
+| `PUBLIC_HOST`           | —                              | Public hostname or URL (mDNS, media URLs, client-facing). Set to your domain when using a reverse proxy (e.g. `kanade.example.com`). Can include scheme and port. |
 | `BIND_ADDR`             | `0.0.0.0:8080`                 | Unified server bind address (WS + HTTP) |
-| `MEDIA_PUBLIC_BASE_URL` | auto (from `SERVER_HOST`)      | Public base URL for media file access (overrides `SERVER_HOST`) |
 | `MDNS_NAME`             | `Kanade`                       | mDNS service instance name             |
 | `RUST_LOG`              | `kanade=info,kanade_core=debug`| Log level (tracing filter)             |
+
+### Reverse Proxy
+
+To serve the Web UI and API from a single port with TLS, use the example
+nginx config in `docker/nginx-proxy.conf`. It proxies:
+
+- `/` → static Web UI files
+- `/ws` → Kanade server WebSocket
+- `/media/` → Kanade server HTTP media
+
+With this setup the Web UI connects automatically — no `?server=` parameter
+needed.
 
 ### Output Node (`kanade-node`)
 
