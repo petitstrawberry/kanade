@@ -19,8 +19,8 @@ function buildWsUrl(raw: string | null, fallback: string): string {
   return base + '/ws';
 }
 
-const wsUrl = buildWsUrl(params.get('server'), `${wsScheme}://${host}:8080/ws`);
-export const mediaBase = normalizeUrl(params.get('media'), `${httpScheme}://${host}:8080`, httpScheme);
+const wsUrl = buildWsUrl(params.get('server'), `${wsScheme}://${host}/ws`);
+export const mediaBase = normalizeUrl(params.get('media'), `${httpScheme}://${host}`, httpScheme);
 
 export const ws = new WsClient(wsUrl, mediaBase);
 
