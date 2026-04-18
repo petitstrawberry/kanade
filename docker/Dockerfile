@@ -9,7 +9,7 @@ WORKDIR /usr/src/kanade
 COPY . .
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    CARGO_INCREMENTAL=0 cargo build --locked --release -p kanade -p kanade-node && \
+    CARGO_INCREMENTAL=0 cargo build --release -p kanade -p kanade-node && \
     cp target/release/kanade /tmp/kanade && \
     cp target/release/kanade-node /tmp/kanade-node
 
