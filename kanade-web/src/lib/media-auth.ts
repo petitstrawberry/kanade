@@ -45,10 +45,15 @@ export async function computeMediaSessionCookieValue(mediaAuthKeyHex: string, me
   return `${mediaAuthKeyId}:${bytesToHex(new Uint8Array(signature))}`;
 }
 
-export function setMediaSessionCookie(cookieValue: string): void {
-  document.cookie = `${MEDIA_SESSION_COOKIE_NAME}=${cookieValue}; path=/; SameSite=Lax`;
+export function setMediaSessionCookie(cookieValue: string, mediaBase: string): void {
+  const mediaHost = new URL(mediaBase).hostname;
+  const isSecure = new URL(mediaBase).protocol === 'https:';
+  const sameSite = mediaHost === window.location.hostname ? 'Lax' : 'None';
+  document.cookie = `${MEDIA_SESSION_COOKIE_NAME}=${cookieValue}; path=/; SameSite=${sameSite}${isSecure ? '; Secure' : ''}`;
 }
 
-export function clearMediaSessionCookie(): void {
-  document.cookie = `${MEDIA_SESSION_COOKIE_NAME}=; path=/; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`;
+export function clearMediaSessionCookie(mediaBase?: string): void {
+  const sameSite = mediaBase && new URL(mediaBase).hostname !== window.location.hostname ? 'None' : 'Lax';
+  const isSecure = mediaBase && new URL(mediaBase).protocol === 'https:';
+  document.cookie = `${MEDIA_SESSION_COOKIE_NAME}=; path=/; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00; SameSite=${sameSite}${isSecure ? '; Secure' : ''}`;
 }

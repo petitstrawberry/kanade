@@ -8,6 +8,7 @@ function emitWsToast(message: string) {
 export class WsClient {
   private ws: WebSocket | null = null;
   private url: string;
+  private mediaBaseUrl: string;
   private fallbackUrl: string | null = null;
   private reqId = 0;
   private pendingRequests = new Map<number, { resolve: (val: any) => void, reject: (err: any) => void }>();
@@ -61,6 +62,7 @@ export class WsClient {
 
   constructor(url: string, mediaBaseUrl: string) {
     this.url = url;
+    this.mediaBaseUrl = mediaBaseUrl;
     this.setMediaBaseUrl(mediaBaseUrl);
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
@@ -305,7 +307,7 @@ export class WsClient {
     try {
       const cookieValue = await computeMediaSessionCookieValue(msg.media_auth_key, msg.media_auth_key_id);
       if (this.ws !== ws) return;
-      setMediaSessionCookie(cookieValue);
+      setMediaSessionCookie(cookieValue, this.mediaBaseUrl);
       this.mediaAuthReady = true;
       this.updateMediaRequestState();
     } catch (err) {
@@ -315,12 +317,13 @@ export class WsClient {
   }
 
   private resetMediaAuth() {
-    clearMediaSessionCookie();
+    clearMediaSessionCookie(this.mediaBaseUrl);
     this.mediaAuthReady = false;
     this.updateMediaRequestState();
   }
 
   private setMediaBaseUrl(mediaBaseUrl: string): void {
+    this.mediaBaseUrl = mediaBaseUrl;
     this.mediaCookieCompatible = mediaBaseUsesCurrentHost(mediaBaseUrl);
     this.updateMediaRequestState();
   }

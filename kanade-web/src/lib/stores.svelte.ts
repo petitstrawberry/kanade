@@ -60,7 +60,10 @@ const initialSavedServer = getStoredValue(SERVER_STORAGE_KEY);
 let currentWsUrl = $state(buildWsUrl(resolveServerValue(initialSavedServer), sameOriginWsFallback));
 let mediaBase = $state(sameOriginMediaFallback);
 
-export const ws = new WsClient(currentWsUrl, mediaBase);
+export const ws = new WsClient(
+  buildWsUrl(resolveServerValue(initialSavedServer), sameOriginWsFallback),
+  sameOriginMediaFallback,
+);
 
 const player = new AudioPlayer(() => {});
 export function getPlayer(): AudioPlayer {
