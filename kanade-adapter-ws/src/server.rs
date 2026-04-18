@@ -907,6 +907,38 @@ async fn serve_path_with_range(
 
     let body = if method == Method::HEAD || content_length == 0 {
         Body::empty()
+    } else if range_header.is_some() {
+        if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+            warn!(path = %path, error = %e, "failed to seek file");
+            return simple_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error");
+        }
+
+        let mut remaining = content_length;
+        let mut data = Vec::with_capacity(content_length as usize);
+        let mut buf = vec![0u8; READ_CHUNK_SIZE.min(content_length as usize)];
+
+        while remaining > 0 {
+            let to_read = remaining.min(buf.len() as u64) as usize;
+            let n = match file.read(&mut buf[..to_read]).await {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(path = %path, error = %e, "failed to read ranged file body");
+                    return simple_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal Server Error",
+                    );
+                }
+            };
+
+            if n == 0 {
+                break;
+            }
+
+            data.extend_from_slice(&buf[..n]);
+            remaining -= n as u64;
+        }
+
+        Body::from(data)
     } else {
         if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
             warn!(path = %path, error = %e, "failed to seek file");
@@ -955,15 +987,11 @@ async fn serve_path_with_range(
     response
 }
 
-fn verify_media_auth(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(), StatusCode> {
+fn verify_media_auth(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
     let cookie_header = headers.get(header::COOKIE).ok_or(StatusCode::FORBIDDEN)?;
     let cookie_str = cookie_header.to_str().map_err(|_| StatusCode::FORBIDDEN)?;
 
-    let session_id = extract_cookie(cookie_str, "kanade_session")
-        .ok_or(StatusCode::FORBIDDEN)?;
+    let session_id = extract_cookie(cookie_str, "kanade_session").ok_or(StatusCode::FORBIDDEN)?;
 
     if state.media_key_store.get(session_id).is_some() {
         Ok(())
@@ -1177,10 +1205,12 @@ fn parse_apic_data(data: &[u8], version: u8) -> Option<lofty::picture::Picture> 
 
     let mime_type = lofty::picture::MimeType::from_str(&mime);
 
-    Some(lofty::picture::Picture::unchecked(pic_data.to_vec())
-        .pic_type(pic_type)
-        .mime_type(mime_type)
-        .build())
+    Some(
+        lofty::picture::Picture::unchecked(pic_data.to_vec())
+            .pic_type(pic_type)
+            .mime_type(mime_type)
+            .build(),
+    )
 }
 
 fn parse_range(header: Option<&str>, total_len: u64) -> Result<Option<(u64, u64)>, ()> {
