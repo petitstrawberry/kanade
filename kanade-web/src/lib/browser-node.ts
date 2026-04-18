@@ -1,5 +1,6 @@
 import { AudioPlayer } from './audio-player';
 import type { PlayerState } from './audio-player';
+import { buildMediaUrl } from './media-auth';
 
 function emitWsToast(message: string) {
   window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
@@ -66,6 +67,8 @@ function isNodeCommand(value: unknown): value is NodeCommand {
 
 export class BrowserNode {
   private readonly player: AudioPlayer;
+  private readonly isMediaReady: () => boolean;
+  private readonly unsubscribeMediaAuth: () => void;
   private ws: WebSocket | null = null;
   private wsUrl: string | null = null;
   private name: string | null = null;
@@ -81,6 +84,7 @@ export class BrowserNode {
   private heartbeatTimeoutId: number | null = null;
   private stateIntervalId: number | null = null;
   private lastSentStateKey: string | null = null;
+  private pendingCommands: NodeCommand[] = [];
 
   private readonly baseDelayMs = 1000;
   private readonly maxDelayMs = 5000;
@@ -111,8 +115,18 @@ export class BrowserNode {
     this.closeSocket();
   };
 
-  constructor(player: AudioPlayer) {
+  constructor(
+    player: AudioPlayer,
+    isMediaReady: () => boolean,
+    onMediaAuthChange: (listener: (ready: boolean) => void) => () => void,
+  ) {
     this.player = player;
+    this.isMediaReady = isMediaReady;
+    this.unsubscribeMediaAuth = onMediaAuthChange((ready) => {
+      if (ready) {
+        this.flushPendingCommands();
+      }
+    });
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
@@ -153,6 +167,14 @@ export class BrowserNode {
     console.log('BrowserNode disconnected');
   }
 
+  destroy(): void {
+    this.disconnect();
+    this.unsubscribeMediaAuth();
+    document.removeEventListener('visibilitychange', this.visibilityHandler);
+    window.removeEventListener('online', this.onlineHandler);
+    window.removeEventListener('offline', this.offlineHandler);
+  }
+
   isConnected(): boolean {
     return this.registered && this.ws?.readyState === WebSocket.OPEN;
   }
@@ -163,7 +185,7 @@ export class BrowserNode {
 
   private toHttpUrl(filePath: string): string {
     if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
-    return `${this.mediaBaseUrl}/media/file/${encodeURIComponent(filePath)}`;
+    return buildMediaUrl(this.mediaBaseUrl!, `/media/file/${encodeURIComponent(filePath)}`);
   }
 
   private openSocket(): void {
@@ -278,6 +300,7 @@ export class BrowserNode {
       this.mediaBaseUrl = msg.media_base_url;
       this.clearRegistrationTimeout();
       this.startStateUpdates();
+      this.flushPendingCommands();
       console.log(`BrowserNode registered: ${this.nodeId}`);
       console.log(`BrowserNode media base URL: ${this.mediaBaseUrl}`);
       return;
@@ -292,6 +315,15 @@ export class BrowserNode {
   }
 
   private handleCommand(command: NodeCommand): void {
+    if (!this.isMediaReady()) {
+      this.pendingCommands.push(structuredClone(command));
+      return;
+    }
+
+    this.handleReadyCommand(command);
+  }
+
+  private handleReadyCommand(command: NodeCommand): void {
     console.log('BrowserNode command', command);
     switch (command.type) {
       case 'play':
@@ -445,6 +477,19 @@ export class BrowserNode {
     this.nodeId = null;
     this.mediaBaseUrl = null;
     this.lastSentStateKey = null;
+    this.pendingCommands = [];
+  }
+
+  private flushPendingCommands(): void {
+    if (!this.mediaBaseUrl || !this.isMediaReady()) return;
+
+    if (this.pendingCommands.length > 0) {
+      const pendingCommands = [...this.pendingCommands];
+      this.pendingCommands = [];
+      for (const command of pendingCommands) {
+        this.handleReadyCommand(command);
+      }
+    }
   }
 
   private closeSocket(): void {

@@ -22,14 +22,18 @@ function buildWsUrl(raw: string | null, fallback: string): string {
 const wsUrl = buildWsUrl(params.get('server'), `${wsScheme}://${host}:8080/ws`);
 export const mediaBase = normalizeUrl(params.get('media'), `${httpScheme}://${host}:8080`, httpScheme);
 
-export const ws = new WsClient(wsUrl);
+export const ws = new WsClient(wsUrl, mediaBase);
 
 const player = new AudioPlayer(() => {});
 export function getPlayer(): AudioPlayer {
   return player;
 }
 
-export const browserNode = new BrowserNode(player);
+export const browserNode = new BrowserNode(
+  player,
+  () => ws.mediaRequestsReady,
+  (listener) => ws.onMediaAuthChange(listener),
+);
 
 export function connectBrowserNode(): void {
   const nodeWs = new URL(wsUrl);
@@ -44,7 +48,7 @@ export function connectBrowserNode(): void {
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     ws.disconnect();
-    browserNode.disconnect();
+    browserNode.destroy();
   });
 }
 

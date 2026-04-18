@@ -3,13 +3,14 @@
   import { fly, fade } from 'svelte/transition';
   import { ws, mediaBase } from '../lib/stores';
   import { formatSampleRate, formatDuration } from '../lib/format';
+  import { buildMediaUrl } from '../lib/media-auth';
   import NodePicker from './NodePicker.svelte';
 
   let { visible = false, onClose }: { visible: boolean; onClose: () => void } = $props();
 
   let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
   let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
-  let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
+  let artworkUrl = $derived(currentTrack?.album_id && ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${currentTrack.album_id}`) : null);
   let artworkError = $state(false);
   $effect(() => { artworkUrl; artworkError = false; });
   let showDetails = $state(false);
@@ -90,7 +91,7 @@
 
       <div class="modal-content">
         <div class="info-wrapper">
-          <div class="cover-art" onclick={() => showDetails = !showDetails}>
+          <button type="button" class="cover-art" onclick={() => showDetails = !showDetails} aria-label="Toggle details">
             {#if artworkUrl && !artworkError}
               <img src={artworkUrl} alt={currentTrack.album_title || 'Album'} onerror={() => (artworkError = true)} />
             {:else}
@@ -116,10 +117,10 @@
                 </div>
               </div>
             </div>
-          </div>
+          </button>
 
           <div class="details">
-            <h1 class="title" onclick={() => showDetails = !showDetails}>{currentTrack.title || currentTrack.file_path.split('/').pop()}</h1>
+            <button type="button" class="title" onclick={() => showDetails = !showDetails} aria-label="Toggle details">{currentTrack.title || currentTrack.file_path.split('/').pop()}</button>
             <h2 class="artist">{currentTrack.artist || 'Unknown Artist'}</h2>
             {#if currentTrack.album_title}
               <h3 class="album">{currentTrack.album_title}</h3>
@@ -155,10 +156,10 @@
           </div>
 
           <div class="buttons">
-            <button class="icon sm" class:active={ws.shuffle} onclick={toggleShuffle}>
+            <button class="icon sm" class:active={ws.shuffle} onclick={toggleShuffle} aria-label="Shuffle">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
             </button>
-            <button class="icon" onclick={playPrev}>
+            <button class="icon" onclick={playPrev} aria-label="Previous">
               <svg width="24" height="24" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"/><path d="M14 3l-10 6 10 6V3z"/></svg>
             </button>
             <button class="icon play" onclick={togglePlay}>
@@ -168,7 +169,7 @@
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4l14 8-14 8V4z"/></svg>
               {/if}
             </button>
-            <button class="icon" onclick={playNext}>
+            <button class="icon" onclick={playNext} aria-label="Next">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5l10 7-10 7V5z"/><rect x="17" y="5" width="4" height="14" rx="1"/></svg>
             </button>
             <button class="icon sm" class:active={ws.repeat !== 'off'} onclick={toggleRepeat}>

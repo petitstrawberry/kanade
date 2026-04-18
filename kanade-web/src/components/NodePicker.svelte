@@ -6,7 +6,7 @@
 </script>
 
 {#if ws.nodes.length > 1}
-  <div class="node-picker" onclick={(e) => e.stopPropagation()}>
+  <div class="node-picker" onclick={(e) => e.stopPropagation()} role="presentation">
     <button class="node-btn" onclick={() => showNodePicker = !showNodePicker}>
       <span class="node-name">{node?.name ?? '—'}</span>
       <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3l3 4 3-4z"/></svg>

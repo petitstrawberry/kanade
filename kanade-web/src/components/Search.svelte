@@ -44,6 +44,7 @@
 
 <div class="search-panel">
   <div class="header">
+    <!-- svelte-ignore a11y_autofocus -->
     <input 
       type="text" 
       class="search-input" 
@@ -193,57 +194,38 @@
   }
 
   .track-actions {
-    display: flex;
-    gap: 4px;
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
+     display: flex;
+     gap: 4px;
+     opacity: 0;
+     transition: opacity 0.2s;
+   }
 
-  .track-item:hover .track-actions {
-    opacity: 1;
-  }
+   .track-item:hover .track-actions {
+     opacity: 1;
+   }
 
-  .track-actions .play-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background-color: var(--bg-dark);
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    cursor: pointer;
-    border: none;
-  }
+   .add-btn {
+     width: 32px;
+     height: 32px;
+     border-radius: 50%;
+     background-color: var(--bg-dark);
+     color: var(--accent);
+     display: flex;
+     align-items: center;
+     justify-content: center;
+     font-size: 20px;
+     transition: all 0.2s;
+   }
 
-  .track-actions .play-btn:hover {
-    background-color: var(--accent);
-    color: var(--bg);
-  }
+   .track-item:hover .add-btn {
+     opacity: 1;
+   }
 
-  .add-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background-color: var(--bg-dark);
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    transition: all 0.2s;
-  }
-
-  .track-item:hover .add-btn {
-    opacity: 1;
-  }
-
-  .add-btn:hover {
-    background-color: var(--accent);
-    color: var(--bg);
-    transform: scale(1.1);
-  }
+   .add-btn:hover {
+     background-color: var(--accent);
+     color: var(--bg);
+     transform: scale(1.1);
+   }
 
   @media (max-width: 768px) {
     .search-panel {

@@ -3,6 +3,7 @@
   import type { Album, Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
   import { mediaBase } from '../lib/stores';
+  import { buildMediaUrl } from '../lib/media-auth';
   import { tick } from 'svelte';
 
   type Mode = 'albums' | 'artists' | 'genres';
@@ -179,7 +180,7 @@
             <button class:active={mode === 'artists'} onclick={() => mode = 'artists'}>Artists</button>
             <button class:active={mode === 'genres'} onclick={() => mode = 'genres'}>Genres</button>
           </div>
-          <button class="size-btn" onclick={() => sizeIndex = (sizeIndex + 1) % 4}>
+          <button class="size-btn" onclick={() => sizeIndex = (sizeIndex + 1) % 4} aria-label="Change grid size">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5"/><rect x="9" y="2" width="5" height="5"/><rect x="2" y="9" width="5" height="5"/><rect x="9" y="9" width="5" height="5"/></svg>
           </button>
         {:else}
@@ -224,7 +225,7 @@
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <div class="album-cover" onclick={() => selectAlbum(album)}>
                       <img
-                        src="{mediaBase}/media/art/{album.id}"
+                        src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${album.id}`) : PLACEHOLDER_SVG}
                         alt={album.title || 'Album'}
                         onerror={(e: Event) => {
                           const img = e.target as HTMLImageElement;
@@ -239,9 +240,9 @@
                         <button class="play-btn" onclick={(e) => { e.stopPropagation(); playAlbumFromGrid(album); }}>▶</button>
                       </div>
                     </div>
-                  <div class="album-info" onclick={() => selectAlbum(album)}>
+                   <button type="button" class="album-info" onclick={() => selectAlbum(album)}>
                     <div class="album-title">{album.title || 'Unknown Album'}</div>
-                  </div>
+                  </button>
                 </div>
               {/each}
             </div>
@@ -253,7 +254,7 @@
           <div class="tracks-header">
             <img
               class="album-art"
-              src="{mediaBase}/media/art/{selectedAlbum.id}"
+              src={ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${selectedAlbum.id}`) : PLACEHOLDER_SVG}
               alt=""
               onerror={(e: Event) => {
                 const img = e.target as HTMLImageElement;
@@ -595,36 +596,46 @@
   }
 
   .track-actions {
-    display: flex;
-    gap: 4px;
-    opacity: 0;
-    transition: opacity 0.2s;
-  }
+     display: flex;
+     gap: 4px;
+     opacity: 0;
+     transition: opacity 0.2s;
+   }
 
-  .track-item:hover .track-actions {
-    opacity: 1;
-  }
+   .track-item:hover .track-actions {
+     opacity: 1;
+   }
 
-  .track-actions .play-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background-color: var(--bg-dark);
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    cursor: pointer;
-    border: none;
-  }
+   .add-btn {
+     width: 32px;
+     height: 32px;
+     border-radius: 50%;
+     background-color: var(--bg-dark);
+     color: var(--accent);
+     display: flex;
+     align-items: center;
+     justify-content: center;
+     font-size: 20px;
+     transition: all 0.2s;
+     cursor: pointer;
+     border: none;
+   }
 
-  .track-actions .play-btn:hover {
-    background-color: var(--accent);
-    color: var(--bg);
-  }
+   .track-item:hover .add-btn {
+     opacity: 1;
+   }
 
-  .disc-separator {
+   .add-btn:hover {
+     background-color: var(--accent);
+     color: var(--bg);
+     transform: scale(1.1);
+   }
+
+   .track-item:hover .track-actions {
+     opacity: 1;
+   }
+
+   .disc-separator {
     padding: 8px 12px 4px;
     font-size: 12px;
     font-weight: 600;
@@ -657,30 +668,6 @@
   .duration {
     color: var(--comment);
     font-variant-numeric: tabular-nums;
-  }
-
-  .add-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background-color: var(--bg-dark);
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    opacity: 0;
-    transition: all 0.2s;
-  }
-
-  .track-item:hover .add-btn {
-    opacity: 1;
-  }
-
-  .add-btn:hover {
-    background-color: var(--accent);
-    color: var(--bg);
-    transform: scale(1.1);
   }
 
   @media (max-width: 768px) {

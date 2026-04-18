@@ -1,13 +1,14 @@
 <script lang="ts">
   import { ws, mediaBase } from '../lib/stores';
   import { formatDuration } from '../lib/format';
+  import { buildMediaUrl } from '../lib/media-auth';
   import NodePicker from './NodePicker.svelte';
 
   let { onOpenNowPlaying }: { onOpenNowPlaying: () => void } = $props();
 
   let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
   let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
-  let artworkUrl = $derived(currentTrack?.album_id ? `${mediaBase}/media/art/${currentTrack.album_id}` : null);
+  let artworkUrl = $derived(currentTrack?.album_id && ws.mediaRequestsReady ? buildMediaUrl(mediaBase, `/media/art/${currentTrack.album_id}`) : null);
   let artworkError = $state(false);
   $effect(() => { artworkUrl; artworkError = false; });
   let isPlaying = $derived(node?.status === 'playing');
@@ -49,6 +50,21 @@
     const m: Record<string, 'off' | 'one' | 'all'> = { off: 'all', all: 'one', one: 'off' };
     ws.sendCommand({ cmd: 'set_repeat', repeat: m[ws.repeat] });
   }
+
+  function handleProgressKeydown(e: KeyboardEvent) {
+    if (!duration || !node) return;
+    let newPos = position;
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      newPos = Math.min(position + 5, duration);
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      newPos = Math.max(position - 5, 0);
+    }
+    if (newPos !== position) {
+      ws.sendCommand({ cmd: 'seek', position_secs: newPos });
+    }
+  }
 </script>
 
 <div class="transport-bar">
@@ -85,10 +101,10 @@
 
   <div class="center-col">
     <div class="controls">
-      <button class="btn ic-small {ws.shuffle ? 'active' : ''}" onclick={toggleShuffle}>
+      <button class="btn ic-small {ws.shuffle ? 'active' : ''}" onclick={toggleShuffle} aria-label="Shuffle">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"/><path d="M10 2l-4 4 4 4"/></svg>
       </button>
-      <button class="btn ic-small" onclick={playPrev}>
+      <button class="btn ic-small" onclick={playPrev} aria-label="Previous">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><rect x="1" y="3" width="3" height="12" rx="1"/><path d="M14 3l-10 6 10 6V3z"/></svg>
       </button>
       <button class="btn ic-large" onclick={togglePlay}>
@@ -98,7 +114,7 @@
           <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M6 3l16 9-16 9V3z"/></svg>
         {/if}
       </button>
-      <button class="btn ic-small" onclick={playNext}>
+      <button class="btn ic-small" onclick={playNext} aria-label="Next">
         <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor"><path d="M4 3l10 6-10 6V3z"/><rect x="14" y="3" width="3" height="12" rx="1"/></svg>
       </button>
       <button class="btn ic-small {ws.repeat !== 'off' ? 'active' : ''}" onclick={toggleRepeat}>
@@ -113,7 +129,7 @@
     <div class="playback-bar">
       <span class="time">{formatDuration(position)}</span>
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div class="progress-wrapper" onclick={seek} role="slider" aria-valuenow={position} tabindex="0">
+      <div class="progress-wrapper" onclick={seek} onkeydown={handleProgressKeydown} role="slider" aria-valuenow={position} aria-valuemin={0} aria-valuemax={duration} tabindex="0">
         <div class="progress-bg">
           <div class="progress-fill" style="width: {(duration ? (position / duration) * 100 : 0)}%"></div>
         </div>

@@ -82,7 +82,8 @@ export type ClientMessage =
 
 export type ServerMessage =
   | { type: "state"; state: PlaybackState }
-  | { type: "response"; req_id: number; data: WsResponse };
+  | { type: "response"; req_id: number; data: WsResponse }
+  | { type: "media_auth"; media_auth_key: string; media_auth_key_id: string };
 
 export type WsResponse =
   | { albums: Album[] }

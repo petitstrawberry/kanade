@@ -1,4 +1,5 @@
 import type { ClientMessage, ServerMessage, WsCommand, WsRequest, WsResponse, Node, Track, RepeatMode } from './types';
+import { clearMediaSessionCookie, computeMediaSessionCookieValue, mediaBaseUsesCurrentHost, setMediaSessionCookie } from './media-auth';
 
 function emitWsToast(message: string) {
   window.dispatchEvent(new CustomEvent('kanade-ws-toast', { detail: { message } }));
@@ -7,6 +8,7 @@ function emitWsToast(message: string) {
 export class WsClient {
   private ws: WebSocket | null = null;
   private url: string;
+  private fallbackUrl: string | null = null;
   private reqId = 0;
   private pendingRequests = new Map<number, { resolve: (val: any) => void, reject: (err: any) => void }>();
   private sendQueue: string[] = [];
@@ -15,6 +17,7 @@ export class WsClient {
   private heartbeatTimeout: number | null = null;
   private retryCount = 0;
   private active = false;
+  private mediaAuthListeners = new Set<(ready: boolean) => void>();
   private readonly connectTimeoutMs = 5000;
   private readonly heartbeatTimeoutMs = 45000;
 
@@ -25,6 +28,9 @@ export class WsClient {
   shuffle = $state(false);
   repeat = $state<RepeatMode>('off');
   connected = $state(false);
+  mediaAuthReady = $state(false);
+  mediaCookieCompatible = $state(true);
+  mediaRequestsReady = $state(false);
 
   private visibilityHandler = () => {
     if (document.visibilityState === 'visible' && !this.connected && this.active) {
@@ -41,6 +47,7 @@ export class WsClient {
 
   private offlineHandler = () => {
     console.log('WS: network offline');
+    this.resetMediaAuth();
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();
@@ -52,11 +59,21 @@ export class WsClient {
     return this.selectedNodeId;
   }
 
-  constructor(url: string) {
+  constructor(url: string, mediaBaseUrl: string) {
     this.url = url;
+    this.mediaCookieCompatible = mediaBaseUsesCurrentHost(mediaBaseUrl);
+    this.updateMediaRequestState();
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
     window.addEventListener('offline', this.offlineHandler);
+  }
+
+  onMediaAuthChange(listener: (ready: boolean) => void): () => void {
+    this.mediaAuthListeners.add(listener);
+    listener(this.mediaRequestsReady);
+    return () => {
+      this.mediaAuthListeners.delete(listener);
+    };
   }
 
   setFallbackUrl(url: string) {
@@ -96,6 +113,8 @@ export class WsClient {
           this.currentIndex = msg.state.current_index;
           this.shuffle = msg.state.shuffle;
           this.repeat = msg.state.repeat;
+        } else if (msg.type === 'media_auth') {
+          void this.handleMediaAuthMessage(msg, ws);
         } else if (msg.type === 'response') {
           const req = this.pendingRequests.get(msg.req_id);
           if (req) {
@@ -115,6 +134,7 @@ export class WsClient {
       this.clearHeartbeat();
       this.ws = null;
       this.connected = false;
+      this.resetMediaAuth();
       this.sendQueue.length = 0;
       if (this.pendingRequests.size > 0) {
         const error = new Error('Disconnected');
@@ -125,19 +145,6 @@ export class WsClient {
       }
       if (this.active) this.scheduleReconnect();
     };
-
-    ws.onopen = () => {
-      if (this.ws !== ws) return;
-      this.clearConnectTimeout();
-      while (this.sendQueue.length > 0) {
-        const msg = this.sendQueue.shift()!;
-        ws.send(msg);
-      }
-      this.connected = true;
-      this.retryCount = 0;
-      this.resetHeartbeat();
-    };
-
     ws.onerror = (err) => {
       if (this.ws !== ws) return;
       this.clearConnectTimeout();
@@ -182,6 +189,7 @@ export class WsClient {
     this.clearConnectTimeout();
     this.clearReconnectTimeout();
     this.clearHeartbeat();
+    this.resetMediaAuth();
     if (this.ws) {
       this.ws.onopen = null;
       this.ws.onmessage = null;
@@ -211,6 +219,7 @@ export class WsClient {
     this.clearHeartbeat();
     this.heartbeatTimeout = window.setTimeout(() => {
       console.warn('WS heartbeat timeout — no message received');
+      this.resetMediaAuth();
       if (this.ws) {
         this.ws.onclose = null;
         this.ws.close();
@@ -265,5 +274,39 @@ export class WsClient {
         }
       }, 10000);
     }) as Promise<WsResponse>;
+  }
+
+  private async handleMediaAuthMessage(msg: Extract<ServerMessage, { type: 'media_auth' }>, ws: WebSocket): Promise<void> {
+    if (!this.mediaCookieCompatible) {
+      this.resetMediaAuth();
+      emitWsToast('Media auth requires the web UI and media server to use the same host.');
+      return;
+    }
+
+    try {
+      const cookieValue = await computeMediaSessionCookieValue(msg.media_auth_key, msg.media_auth_key_id);
+      if (this.ws !== ws) return;
+      setMediaSessionCookie(cookieValue);
+      this.mediaAuthReady = true;
+      this.updateMediaRequestState();
+    } catch (err) {
+      this.resetMediaAuth();
+      console.error('Failed to initialize media auth cookie:', err);
+    }
+  }
+
+  private resetMediaAuth() {
+    clearMediaSessionCookie();
+    this.mediaAuthReady = false;
+    this.updateMediaRequestState();
+  }
+
+  private updateMediaRequestState() {
+    const nextReady = this.mediaCookieCompatible && this.mediaAuthReady;
+    if (this.mediaRequestsReady === nextReady) return;
+    this.mediaRequestsReady = nextReady;
+    for (const listener of this.mediaAuthListeners) {
+      listener(nextReady);
+    }
   }
 }
