@@ -248,7 +248,41 @@ Replies to request messages. The `data` field contains the response variant.
 HTTP surface for media file delivery to clients. Serves tracks and artwork by
 stable IDs backed by the library database.
 
-**Server endpoint**: `MEDIA_ADDR` (default `http://HOST:8081`)
+**Server endpoint**: Unified with WS on `BIND_ADDR` (default `http://HOST:8080`)
+
+### 3.0 Authentication (Session Cookie)
+
+All `/media/*` requests require a valid session cookie. The server generates a per-client session token when a WebSocket connection is established and stores it in an in-memory key store.
+
+**Session lifecycle:**
+1. Client connects via `/ws` (mTLS or direct)
+2. Server generates a unique session token (UUID)
+3. Server sends `{"type":"media_auth","media_auth_key":"<hex>","media_auth_key_id":"<uuid>"}` to the client
+4. Client sets `kanade_session=<uuid>` cookie via `HTTPCookieStorage` (Secure, Path=/media)
+5. AVPlayer and URLSession automatically include the cookie on `/media/*` requests
+6. Server validates the cookie against the key store
+7. On WebSocket disconnect, the session token is revoked
+
+**Cookie properties:**
+- Name: `kanade_session`
+- Value: session token (UUID)
+- Path: `/media`
+- Secure: yes
+- HttpOnly: no (required so the app can manage it)
+
+**Request format:**
+```
+GET /media/tracks/<track_id> HTTP/1.1
+Host: HOST:8080
+Cookie: kanade_session=<uuid>
+Range: bytes=0-1023  (optional)
+```
+
+**Verification:**
+- Extract `kanade_session` from Cookie header
+- Look up session token in key store
+- If not found → HTTP 403
+- No expiry on cookie itself — validity is tied to the WebSocket session
 
 ### 3.1 Request Format
 

@@ -46,6 +46,7 @@ pub async fn run(
                     ServerMessage::State { state: new_state } => {
                         state = new_state;
                     }
+                    ServerMessage::MediaAuth { .. } => {}
                     ServerMessage::Response { req_id: _, data } => {
                         app.handle_response(data);
                     }

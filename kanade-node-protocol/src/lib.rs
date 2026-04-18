@@ -42,6 +42,10 @@ pub struct NodeRegistration {
 pub struct NodeRegistrationAck {
     pub node_id: String,
     pub media_base_url: String,
+    #[serde(default)]
+    pub media_auth_key: Option<String>,
+    #[serde(default)]
+    pub media_auth_key_id: Option<String>,
 }
 
 /// Commands sent from the Kanade server to an output node.

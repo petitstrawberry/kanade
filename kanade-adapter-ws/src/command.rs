@@ -90,6 +90,10 @@ pub enum ServerMessage {
     State {
         state: kanade_core::state::PlaybackState,
     },
+    MediaAuth {
+        media_auth_key: String,
+        media_auth_key_id: String,
+    },
     Response {
         req_id: u64,
         data: WsResponse,

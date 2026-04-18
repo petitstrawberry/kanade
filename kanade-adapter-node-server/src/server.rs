@@ -116,6 +116,8 @@ async fn handle_node_connection(
     let ack = NodeRegistrationAck {
         node_id: node_id.clone(),
         media_base_url,
+        media_auth_key: None,
+        media_auth_key_id: None,
     };
     if ws_tx
         .send(Message::Text(

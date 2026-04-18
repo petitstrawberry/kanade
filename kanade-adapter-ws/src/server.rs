@@ -1,7 +1,8 @@
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -25,6 +26,7 @@ use kanade_core::{controller::Core, model::Node};
 use kanade_db::Database;
 use kanade_node_protocol::NodeRegistration;
 use lofty::{prelude::*, probe::Probe};
+use rand::RngCore;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
@@ -42,11 +44,40 @@ use crate::{
 const RECONNECT_GRACE_MS: u64 = 5000;
 const READ_CHUNK_SIZE: usize = 64 * 1024;
 
+pub struct MediaKeyStore {
+    keys: RwLock<HashMap<String, [u8; 32]>>,
+}
+
+impl MediaKeyStore {
+    pub fn new() -> Self {
+        Self {
+            keys: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn generate(&self) -> (String, [u8; 32]) {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        let key_id = uuid::Uuid::new_v4().to_string();
+        self.keys.write().unwrap().insert(key_id.clone(), key);
+        (key_id, key)
+    }
+
+    pub fn get(&self, key_id: &str) -> Option<[u8; 32]> {
+        self.keys.read().unwrap().get(key_id).copied()
+    }
+
+    pub fn revoke(&self, key_id: &str) {
+        self.keys.write().unwrap().remove(key_id);
+    }
+}
+
 pub struct AppState {
     pub core: Arc<Core>,
     pub db_path: PathBuf,
     pub broadcaster: Arc<WsBroadcaster>,
     pub media_base_url: String,
+    pub media_key_store: Arc<MediaKeyStore>,
 }
 
 enum ArtResult {
@@ -155,7 +186,10 @@ async fn media_track_handler(
     headers: HeaderMap,
     method: Method,
 ) -> Response<Body> {
-    let track_id = track_id.split('?').next().unwrap_or(&track_id).to_string();
+    if let Err(status) = verify_media_auth(&state, &headers) {
+        return body_response(status, Body::empty());
+    }
+
     let db_path = state.db_path.clone();
 
     let track = match tokio::task::spawn_blocking(move || {
@@ -182,13 +216,17 @@ async fn media_track_handler(
     .await
 }
 
-#[instrument(skip(state))]
+#[instrument(skip(state, headers))]
 async fn media_art_handler(
     State(state): State<Arc<AppState>>,
     Path(album_id): Path<String>,
+    headers: HeaderMap,
     method: Method,
 ) -> Response<Body> {
-    let album_id = album_id.split('?').next().unwrap_or(&album_id).to_string();
+    if let Err(status) = verify_media_auth(&state, &headers) {
+        return body_response(status, Body::empty());
+    }
+
     info!(album_id = %album_id, "artwork request");
 
     let db_path = state.db_path.clone();
@@ -253,13 +291,17 @@ async fn media_art_handler(
     }
 }
 
-#[instrument(skip(_state, headers))]
+#[instrument(skip(state, headers))]
 async fn media_file_handler(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
     headers: HeaderMap,
     method: Method,
 ) -> Response<Body> {
+    if let Err(status) = verify_media_auth(&state, &headers) {
+        return body_response(status, Body::empty());
+    }
+
     let decoded = percent_decode(&path);
     if decoded.is_empty() || decoded.contains("..") {
         return simple_response(StatusCode::BAD_REQUEST, "Bad Request");
@@ -284,6 +326,7 @@ async fn run_ui_mode(
 ) {
     let mut state_rx = state.broadcaster.subscribe();
     let mut local_node_id: Option<String> = None;
+    let (key_id, key) = state.media_key_store.generate();
     let snapshot = state.core.state_handle().read().await.clone();
     let node_summary = snapshot
         .nodes
@@ -295,6 +338,16 @@ async fn run_ui_mode(
     info!(peer = %peer, selected_node_id = ?snapshot.selected_node_id, nodes = %node_summary, "ws initial snapshot");
     if let Ok(json) = serde_json::to_string(&ServerMessage::State { state: snapshot }) {
         if ws_tx.send(Message::Text(json.into())).await.is_err() {
+            state.media_key_store.revoke(&key_id);
+            return;
+        }
+    }
+    if let Ok(json) = serde_json::to_string(&ServerMessage::MediaAuth {
+        media_auth_key: hex::encode(key),
+        media_auth_key_id: key_id.clone(),
+    }) {
+        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+            state.media_key_store.revoke(&key_id);
             return;
         }
     }
@@ -365,6 +418,8 @@ async fn run_ui_mode(
     if let Some(nid) = local_node_id {
         let _ = state.core.local_session_stop(&nid).await;
     }
+    state.media_key_store.revoke(&key_id);
+    info!(peer = %peer, key_id = %key_id, "revoked media key");
 }
 
 async fn handle_ui_client_message(
@@ -412,20 +467,26 @@ async fn run_node_mode(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| display_name.clone());
 
+    let (key_id, key) = state.media_key_store.generate();
+
     let ack = ServerMessage::NodeRegistrationAck {
         ack: kanade_node_protocol::NodeRegistrationAck {
             node_id: node_id.clone(),
             media_base_url: state.media_base_url.clone(),
+            media_auth_key: Some(hex::encode(key)),
+            media_auth_key_id: Some(key_id.clone()),
         },
     };
     let ack_json = match serde_json::to_string(&ack) {
         Ok(json) => json,
         Err(e) => {
+            state.media_key_store.revoke(&key_id);
             warn!(peer = %peer, error = %e, "Node failed to serialize ack");
             return;
         }
     };
     if ws_tx.send(Message::Text(ack_json.into())).await.is_err() {
+        state.media_key_store.revoke(&key_id);
         return;
     }
 
@@ -559,6 +620,8 @@ async fn run_node_mode(
         state.core.unregister_output(&node_id, &connection_id).await;
         state.core.handle_node_disconnected(&node_id).await;
     }
+    state.media_key_store.revoke(&key_id);
+    info!(peer = %peer, node_id = %node_id, key_id = %key_id, "revoked media key");
 }
 
 async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Option<String>) {
@@ -890,6 +953,34 @@ async fn serve_path_with_range(
         insert_header(&mut response, header::CACHE_CONTROL, value);
     }
     response
+}
+
+fn verify_media_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), StatusCode> {
+    let cookie_header = headers.get(header::COOKIE).ok_or(StatusCode::FORBIDDEN)?;
+    let cookie_str = cookie_header.to_str().map_err(|_| StatusCode::FORBIDDEN)?;
+
+    let session_id = extract_cookie(cookie_str, "kanade_session")
+        .ok_or(StatusCode::FORBIDDEN)?;
+
+    if state.media_key_store.get(session_id).is_some() {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+fn extract_cookie<'a>(cookie_str: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("{}=", name);
+    for pair in cookie_str.split(';') {
+        let trimmed = pair.trim();
+        if let Some(value) = trimmed.strip_prefix(&prefix) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn bytes_response(
