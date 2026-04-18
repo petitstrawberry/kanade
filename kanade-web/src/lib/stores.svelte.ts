@@ -13,8 +13,14 @@ function normalizeUrl(raw: string | null, fallback: string, scheme: string): str
   return `${scheme}://${raw}`;
 }
 
-const wsUrl = normalizeUrl(params.get('server'), `${wsScheme}://${host}:8080`, wsScheme);
-export const mediaBase = normalizeUrl(params.get('media'), `${httpScheme}://${host}:8081`, httpScheme);
+function buildWsUrl(raw: string | null, fallback: string): string {
+  const base = normalizeUrl(raw, fallback, wsScheme);
+  if (base.endsWith('/ws')) return base;
+  return base + '/ws';
+}
+
+const wsUrl = buildWsUrl(params.get('server'), `${wsScheme}://${host}:8080/ws`);
+export const mediaBase = normalizeUrl(params.get('media'), `${httpScheme}://${host}:8080`, httpScheme);
 
 export const ws = new WsClient(wsUrl);
 
@@ -27,7 +33,7 @@ export const browserNode = new BrowserNode(player);
 
 export function connectBrowserNode(): void {
   const nodeWs = new URL(wsUrl);
-  nodeWs.pathname = '/';
+  nodeWs.pathname = '/ws';
   nodeWs.search = '';
   nodeWs.hash = '';
   const nodeWsUrl = nodeWs.toString();

@@ -6,8 +6,7 @@ use tracing::info;
 #[derive(Parser)]
 #[command(name = "kanade-tui", about = "Terminal UI for Kanade music server")]
 struct Cli {
-    /// WebSocket server URL (e.g. ws://127.0.0.1:8080)
-    #[arg(short, long, env = "WS_URL", default_value = "ws://127.0.0.1:8080")]
+    #[arg(short, long, env = "WS_URL", default_value = "127.0.0.1:8080")]
     server: String,
 }
 
@@ -27,7 +26,12 @@ async fn main() -> Result<()> {
 
     info!("kanade-tui starting … connecting to {}", cli.server);
 
-    let (ws_rx, ws_tx) = ws::connect(&cli.server).await?;
+    let ws_url = if cli.server.contains("://") {
+        cli.server.clone()
+    } else {
+        format!("ws://{}/ws", cli.server)
+    };
+    let (ws_rx, ws_tx) = ws::connect(&ws_url).await?;
 
     kanade_tui::run(ws_rx, ws_tx).await?;
 

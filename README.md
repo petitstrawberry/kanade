@@ -8,8 +8,8 @@ unified playback API that multiple frontends can consume simultaneously.
 Output nodes connect to the server over the [Kanade Protocol](protocols.md)
 and drive local audio backends (MPD, etc.). Clients control playback via
 WebSocket (JSON), OpenHome (UPnP/SOAP), or a built-in TUI — all driven by a
-single shared state. All WebSocket connections (clients and nodes) use a
-single port (`:8080`).
+single shared state. The server exposes a single port with path-based routing:
+`/ws` for WebSocket and `/media/` for HTTP media serving.
 
 ## Features
 
@@ -31,22 +31,23 @@ single port (`:8080`).
 ## Architecture
 
 ```
-  Clients                             Kanade Server                           Output Nodes
-  ┌──────────┐                       ┌──────────────────┐                 ┌──────────────┐
-  │ kanade-  │  WS :8080, HTTP: 8081 │                  │   WS :8080      │ living-room  │
-  │ web      │─────────────────────▶ │  kanade-core     │────────────────▶│  (MPD)       │
-  └──────────┘                       │  State · Queue   │                 └──────────────┘
-                                     │  Controller      │                 ┌──────────────┐
-                                     │   WS :8080       |                 │  study       │
-                                     │  kanade-db       │────────────────▶│  (MPD)       │
-                                     │  SQLite + FTS5   │                 └──────────────┘
-  ┌──────────┐  WS :8080             │                  │   WS :8080      ┌──────────────┐
-  │ kanade-  │─────────────────────▶ │  kanade-scanner  │────────────────▶│  kitchen     │
-  │ tui      │                       └──────────────────┘                 │  (MPD)       │
-  └──────────┘                                                            └──────────────┘
+  Clients                          Kanade Server (:8080)                     Output Nodes
+  ┌──────────┐                     ┌────────────────────┐                  ┌──────────────┐
+  │ kanade-  │  ws://host:8080/ws  │                    │  ws://host:8080/ws │ living-room  │
+  │ web      │───────────────────▶ │  axum unified      │───────────────▶ │  (MPD)       │
+  └──────────┘                     │  /ws    WebSocket  │                  └──────────────┘
+                                   │  /media/ HTTP      │                  ┌──────────────┐
+  ┌──────────┐  ws://host:8080/ws  │                    │  ws://host:8080/ws │  study       │
+  │ kanade-  │───────────────────▶ │  kanade-core       │───────────────▶ │  (MPD)       │
+  │ tui      │                     │  kanade-db         │                  └──────────────┘
+  └──────────┘                     │  kanade-scanner    │                  ┌──────────────┐
+                                   └────────────────────┘                  │  kitchen     │
+                                   OpenHome: :8090 (separate port)         │  (MPD)       │
+                                                                          └──────────────┘
 
-  WS   :8080   All WebSocket clients   (web, tui, output nodes)
-  HTTP :8081   Media Surface           (track streaming + artwork)
+  :8080  /ws      WebSocket (clients + output nodes)
+         /media/  HTTP media surface (track streaming + artwork)
+  :8090  OpenHome (separate port, UPnP/SOAP)
 ```
 
 See [DESIGN.md](DESIGN.md) for detailed design decisions and data flow.
@@ -75,7 +76,7 @@ for clients that don't specify a node.
 
 ### 3. Connect a client
 
-- **Web**: open `kanade-web/` (Svelte) — `?server=ws://HOST:8080`
+- **Web**: open `kanade-web/` (Svelte) — `?server=HOST:8080`
 - **TUI**: `cargo run -p kanade-tui --release`
 - **OpenHome**: point any control point at `HOST:8090`
 
@@ -95,9 +96,8 @@ direnv allow   # or: nix develop
 | `DB_PATH`               | `kanade.db`                    | SQLite database file path              |
 | `SCAN_INTERVAL_SECS`    | `300`                          | Interval between periodic scans        |
 | `SERVER_HOST`           | —                              | Public hostname (mDNS advertisement + media URL fallback) |
-| `MEDIA_ADDR`            | `0.0.0.0:8081`                 | HTTP media server bind address         |
+| `BIND_ADDR`             | `0.0.0.0:8080`                 | Unified server bind address (WS + HTTP) |
 | `MEDIA_PUBLIC_BASE_URL` | auto (from `SERVER_HOST`)      | Public base URL for media file access (overrides `SERVER_HOST`) |
-| `WS_ADDR`               | `0.0.0.0:8080`                 | WebSocket server bind address          |
 | `OH_ADDR`               | `0.0.0.0:8090`                 | OpenHome HTTP server bind address      |
 | `MDNS_NAME`             | `Kanade`                       | mDNS service instance name             |
 | `RUST_LOG`              | `kanade=info,kanade_core=debug`| Log level (tracing filter)             |
@@ -107,7 +107,7 @@ direnv allow   # or: nix develop
 | Variable     | Default                  | Description                            |
 | ------------ | ------------------------ | -------------------------------------- |
 | `NODE_NAME`  | `node`                   | Human-readable name (id is auto-assigned) |
-| `SERVER_ADDR`| `ws://127.0.0.1:8080`   | Kanade server WebSocket endpoint        |
+| `SERVER_ADDR`| `127.0.0.1:8080`        | Kanade server address (host:port)        |
 | `MPD_HOST`   | `127.0.0.1`              | Local MPD host                         |
 | `MPD_PORT`   | `6600`                   | Local MPD port                         |
 | `RUST_LOG`   | `kanade_node=info`       | Log filter                             |
@@ -133,7 +133,7 @@ Node connects to a host MPD by default (`MPD_HOST=host.docker.internal`).
 Copy `docker-compose.node.yml` to the target machine and run:
 
 ```sh
-SERVER_ADDR=ws://kanade.example.com:8080 MPD_HOST=127.0.0.1 \
+SERVER_ADDR=kanade.example.com:8080 MPD_HOST=127.0.0.1 \
   docker compose -f docker-compose.node.yml up -d
 ```
 
@@ -142,8 +142,8 @@ SERVER_ADDR=ws://kanade.example.com:8080 MPD_HOST=127.0.0.1 \
 | Protocol | Port | Direction | Format |
 | -------- | ---- | --------- | ------ |
 | **Kanade Protocol** | | | |
-| ├─ WebSocket | 8080 | Server ↔ All clients | WebSocket JSON |
-| └─ Media Surface | 8081 | Clients → Server | HTTP |
+| ├─ WebSocket | 8080 (`/ws`) | Server ↔ All clients | WebSocket JSON |
+| └─ Media Surface | 8080 (`/media/`) | Clients → Server | HTTP |
 | **OpenHome / UPnP** | 8090 | Control Points → Server | SOAP/XML |
 
 See [protocols.md](protocols.md) for detailed protocol specifications.
@@ -159,9 +159,9 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 | `kanade-node-protocol`     | Shared Kanade Protocol message types              |
 | `kanade-adapter-mpd`       | MPD audio backend (used by `kanade-node`)         |
 | `kanade-adapter-node-server`| Server-side node handler (merged into kanade-adapter-ws) |
-| `kanade-adapter-ws`        | WebSocket client API + state broadcast            |
+| `kanade-adapter-ws`        | WebSocket + HTTP media (axum unified router)     |
 | `kanade-adapter-openhome`  | OpenHome/UPnP SOAP adapter                       |
-| `kanade-server-http`       | HTTP media file serving                           |
+| `kanade-server-http`       | HTTP media file serving (superseded by kanade-adapter-ws) |
 | `kanade-node`              | Output node binary (connects to server, drives MPD) |
 | `kanade-tui`               | Terminal UI client (ratatui)                      |
 | `kanade-web`               | Web client (Svelte)                               |

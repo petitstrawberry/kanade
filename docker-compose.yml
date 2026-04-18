@@ -6,15 +6,13 @@ services:
       dockerfile: docker/Dockerfile
     command: kanade
     ports:
-      - "${WS_PORT:-8080}:8080"
-      - "${MEDIA_PORT:-8081}:8081"
+      - "${SERVER_PORT:-8080}:8080"
       - "${OH_PORT:-8090}:8090"
     environment:
       MUSIC_DIR: /music
       DB_PATH: /data/kanade.db
-      MEDIA_ADDR: "0.0.0.0:8081"
+      BIND_ADDR: "0.0.0.0:8080"
       SERVER_HOST: "${SERVER_HOST:-}"
-      WS_ADDR: "0.0.0.0:8080"
       OH_ADDR: "0.0.0.0:8090"
       SCAN_INTERVAL_SECS: "${SCAN_INTERVAL_SECS:-300}"
       RUST_LOG: "${RUST_LOG:-kanade=info,kanade_core=debug}"
@@ -47,7 +45,7 @@ services:
       - node
     environment:
       NODE_NAME: "${NODE_NAME:-default}"
-      SERVER_ADDR: "${SERVER_ADDR:-ws://kanade:8080}"
+      SERVER_ADDR: "${SERVER_ADDR:-kanade:8080}"
       MPD_HOST: "${MPD_HOST:-host.docker.internal}"
       MPD_PORT: "${MPD_PORT:-6600}"
       RUST_LOG: "${NODE_RUST_LOG:-kanade_node=info}"

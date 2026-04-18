@@ -2,7 +2,7 @@
 # Copy this file to the machine running kanade-node (e.g. Raspberry Pi, NUC).
 #
 # Usage:
-#   SERVER_ADDR=ws://kanade.example.com:8080 MPD_HOST=127.0.0.1 docker compose -f docker-compose.node.yml up -d
+#   SERVER_ADDR=kanade.example.com:8080 MPD_HOST=127.0.0.1 docker compose -f docker-compose.node.yml up -d
 
 services:
   node:
@@ -14,7 +14,7 @@ services:
     container_name: kanade-node
     environment:
       NODE_NAME: "${NODE_NAME:-default}"
-      SERVER_ADDR: "${SERVER_ADDR:-ws://kanade:8080}"
+      SERVER_ADDR: "${SERVER_ADDR:-kanade:8080}"
       MPD_HOST: "${MPD_HOST:-host.docker.internal}"
       MPD_PORT: "${MPD_PORT:-6600}"
       RUST_LOG: "${NODE_RUST_LOG:-kanade_node=info}"
