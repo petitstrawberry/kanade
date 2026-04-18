@@ -1,56 +1,30 @@
 # Kanade
 
-**奏** — A self-hosted music player server written in Rust.
+**奏 (Kanade)** — a self-hosted music server for people who want their own library,
+their own players, and their own output devices.
 
-Kanade sits between your music collection and your audio output, providing a
-unified playback API that multiple frontends can consume simultaneously.
+Use Kanade to scan your music collection, browse it from multiple clients, and
+play it through one or more output nodes in your home. You can control the same
+library from the web UI or the terminal UI.
 
-Output nodes connect to the server over the [Kanade Protocol](protocols.md)
-and drive local audio backends (MPD, etc.). Clients control playback via
-WebSocket (JSON), OpenHome (UPnP/SOAP), or a built-in TUI — all driven by a
-single shared state. The server exposes a single port with path-based routing:
-`/ws` for WebSocket and `/media/` for HTTP media serving.
+Kanade is built for users first: point it at your music folder, start the
+server, connect an output node, and play. If you want the implementation
+details later, see [DESIGN.md](DESIGN.md) and [protocols.md](protocols.md).
 
 ## Features
 
-- **Node-based playback** — logical nodes with per-node queues, volume,
-  shuffle and repeat; multiple nodes can run on different machines
-- **Output node separation** — audio backends run as separate processes
-  (`kanade-node`) and connect to the server over WebSocket
-- **MPD backend** — the reference output node drives a local
-  [MPD](https://www.musicpd.org/) daemon; other backends are possible
-- **Library management** — scans music directories, extracts metadata with
-  [lofty](https://github.com/Serial-ATA/lofty-rs), indexes in SQLite with
-  FTS5 full-text search
-- **Kanade Protocol** — native WebSocket/JSON protocol family with Node
-  Subprotocol (server ↔ output nodes) and Client Subprotocol (server ↔ clients)
-- **OpenHome/UPnP** — external SOAP/XML adapter for control points like JPLAY
-- **Hexagonal architecture** — core domain is adapter-agnostic; swap
-  backends without touching business logic
-
-## Architecture
-
-```
-  Clients                          Kanade Server (:8080)                     Output Nodes
-  ┌──────────┐                     ┌────────────────────┐                  ┌──────────────┐
-  │ kanade-  │  ws://host:8080/ws  │                    │  ws://host:8080/ws │ living-room  │
-  │ web      │───────────────────▶ │  axum unified      │───────────────▶ │  (MPD)       │
-  └──────────┘                     │  /ws    WebSocket  │                  └──────────────┘
-                                   │  /media/ HTTP      │                  ┌──────────────┐
-  ┌──────────┐  ws://host:8080/ws  │                    │  ws://host:8080/ws │  study       │
-  │ kanade-  │───────────────────▶ │  kanade-core       │───────────────▶ │  (MPD)       │
-  │ tui      │                     │  kanade-db         │                  └──────────────┘
-  └──────────┘                     │  kanade-scanner    │                  ┌──────────────┐
-                                   └────────────────────┘                  │  kitchen     │
-                                   OpenHome: :8090 (separate port)         │  (MPD)       │
-                                                                          └──────────────┘
-
-  :8080  /ws      WebSocket (clients + output nodes)
-         /media/  HTTP media surface (track streaming + artwork)
-  :8090  OpenHome (separate port, UPnP/SOAP)
-```
-
-See [DESIGN.md](DESIGN.md) for detailed design decisions and data flow.
+- **Play your own library** — scan local music folders and browse albums,
+  artists, tracks, and search results from your own server
+- **Control from multiple clients** — use the web UI or terminal UI against
+  the same playback state
+- **Send audio to different rooms** — connect one or more output nodes and
+  control them independently
+- **Per-node playback controls** — each node keeps its own queue, volume,
+  shuffle, and repeat state
+- **MPD output today, more backends later** — the reference node drives a
+  local [MPD](https://www.musicpd.org/) daemon
+- **Built-in media serving** — artwork and track streaming are exposed by the
+  server so clients can browse and play from a single place
 
 ## Quick Start
 
@@ -78,7 +52,6 @@ for clients that don't specify a node.
 
 - **Web**: open `kanade-web/` (Svelte) — `?server=HOST:8080`
 - **TUI**: `cargo run -p kanade-tui --release`
-- **OpenHome**: point any control point at `HOST:8090`
 
 ### Nix Dev Shell
 
@@ -98,7 +71,6 @@ direnv allow   # or: nix develop
 | `SERVER_HOST`           | —                              | Public hostname (mDNS advertisement + media URL fallback) |
 | `BIND_ADDR`             | `0.0.0.0:8080`                 | Unified server bind address (WS + HTTP) |
 | `MEDIA_PUBLIC_BASE_URL` | auto (from `SERVER_HOST`)      | Public base URL for media file access (overrides `SERVER_HOST`) |
-| `OH_ADDR`               | `0.0.0.0:8090`                 | OpenHome HTTP server bind address      |
 | `MDNS_NAME`             | `Kanade`                       | mDNS service instance name             |
 | `RUST_LOG`              | `kanade=info,kanade_core=debug`| Log level (tracing filter)             |
 
@@ -137,14 +109,34 @@ SERVER_ADDR=kanade.example.com:8080 MPD_HOST=127.0.0.1 \
   docker compose -f docker-compose.node.yml up -d
 ```
 
+## Architecture
+
+```
+  Clients                          Kanade Server (:8080)                     Output Nodes
+  ┌──────────┐                     ┌────────────────────┐                  ┌──────────────┐
+  │ kanade-  │  ws://host:8080/ws  │                    │  ws://host:8080/ws │ living-room  │
+  │ web      │───────────────────▶ │  axum unified      │───────────────▶ │  (MPD)       │
+  └──────────┘                     │  /ws    WebSocket  │                  └──────────────┘
+                                   │  /media/ HTTP      │                  ┌──────────────┐
+  ┌──────────┐  ws://host:8080/ws  │                    │  ws://host:8080/ws │  study       │
+  │ kanade-  │───────────────────▶ │  kanade-core       │───────────────▶ │  (MPD)       │
+  │ tui      │                     │  kanade-db         │                  └──────────────┘
+  └──────────┘                     │  kanade-scanner    │                  ┌──────────────┐
+                                   └────────────────────┘                  │  kitchen     │
+                                                                          └──────────────┘
+
+  :8080  /ws      WebSocket (clients + output nodes)
+         /media/  HTTP media surface (track streaming + artwork)
+```
+
+For implementation details and design decisions, see [DESIGN.md](DESIGN.md).
+
 ## Protocols
 
 | Protocol | Port | Direction | Format |
 | -------- | ---- | --------- | ------ |
-| **Kanade Protocol** | | | |
-| ├─ WebSocket | 8080 (`/ws`) | Server ↔ All clients | WebSocket JSON |
-| └─ Media Surface | 8080 (`/media/`) | Clients → Server | HTTP |
-| **OpenHome / UPnP** | 8090 | Control Points → Server | SOAP/XML |
+| WebSocket | 8080 (`/ws`) | Server ↔ All clients | WebSocket JSON |
+| Media Surface | 8080 (`/media/`) | Clients → Server | HTTP |
 
 See [protocols.md](protocols.md) for detailed protocol specifications.
 
@@ -160,7 +152,6 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 | `kanade-adapter-mpd`       | MPD audio backend (used by `kanade-node`)         |
 | `kanade-adapter-node-server`| Server-side node handler (merged into kanade-adapter-ws) |
 | `kanade-adapter-ws`        | WebSocket + HTTP media (axum unified router)     |
-| `kanade-adapter-openhome`  | OpenHome/UPnP SOAP adapter                       |
 | `kanade-server-http`       | HTTP media file serving (superseded by kanade-adapter-ws) |
 | `kanade-node`              | Output node binary (connects to server, drives MPD) |
 | `kanade-tui`               | Terminal UI client (ratatui)                      |
@@ -169,4 +160,3 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
-
