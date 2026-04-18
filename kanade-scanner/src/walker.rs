@@ -139,7 +139,10 @@ pub fn find_cover_art(dir: &Path) -> Option<String> {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_lower = name.to_string_lossy().to_lowercase();
-        if COVER_FILENAMES.iter().any(|c| c.to_lowercase() == name_lower) {
+        if COVER_FILENAMES
+            .iter()
+            .any(|c| c.to_lowercase() == name_lower)
+        {
             return Some(entry.path().to_string_lossy().into_owned());
         }
     }

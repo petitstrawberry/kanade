@@ -7,10 +7,7 @@ use tracing::{debug, error, info, warn};
 
 pub async fn connect(
     addr: &str,
-) -> Result<(
-    mpsc::Receiver<ServerMessage>,
-    mpsc::Sender<ClientMessage>,
-)> {
+) -> Result<(mpsc::Receiver<ServerMessage>, mpsc::Sender<ClientMessage>)> {
     info!("Connecting to Kanade server at {addr} …");
     let (ws_stream, _) = connect_async(addr).await?;
     info!("Connected to Kanade server");

@@ -119,10 +119,12 @@ impl App {
     pub fn new(ws_tx: mpsc::Sender<ClientMessage>) -> Self {
         let tx = ws_tx.clone();
         tokio::spawn(async move {
-            let _ = tx.send(ClientMessage::Request {
-                req_id: 1,
-                req: WsRequest::GetAlbums,
-            }).await;
+            let _ = tx
+                .send(ClientMessage::Request {
+                    req_id: 1,
+                    req: WsRequest::GetAlbums,
+                })
+                .await;
         });
 
         Self {
@@ -241,7 +243,8 @@ impl App {
             self.library_selected_genre = None;
             self.library_detail.borrow_mut().select(None);
         } else if self.library_level == 1
-            && (self.library_mode == LibraryMode::Artists || self.library_mode == LibraryMode::Genres)
+            && (self.library_mode == LibraryMode::Artists
+                || self.library_mode == LibraryMode::Genres)
         {
             self.artist_tracks.clear();
             self.genre_tracks.clear();
@@ -425,7 +428,11 @@ impl App {
                 self.albums = albums;
                 self.library_list
                     .borrow_mut()
-                    .select(if self.albums.is_empty() { None } else { Some(0) });
+                    .select(if self.albums.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
             }
             WsResponse::AlbumTracks { tracks } => {
                 let empty = tracks.is_empty();
@@ -438,7 +445,11 @@ impl App {
                 self.artists = artists;
                 self.library_list
                     .borrow_mut()
-                    .select(if self.artists.is_empty() { None } else { Some(0) });
+                    .select(if self.artists.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
             }
             WsResponse::ArtistAlbums { albums } => {
                 let empty = albums.is_empty();
@@ -458,7 +469,11 @@ impl App {
                 self.genres = genres;
                 self.library_list
                     .borrow_mut()
-                    .select(if self.genres.is_empty() { None } else { Some(0) });
+                    .select(if self.genres.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    });
             }
             WsResponse::GenreAlbums { albums } => {
                 let empty = albums.is_empty();
@@ -502,7 +517,11 @@ impl App {
                     self.in_search_input = false;
                     self.search_list
                         .borrow_mut()
-                        .select(if self.search_results.is_empty() { None } else { Some(0) });
+                        .select(if self.search_results.is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
                     return;
                 }
                 KeyCode::Backspace => {
@@ -595,7 +614,9 @@ impl App {
                         let vol = node.volume.saturating_add(5).min(100);
                         let tx = self.ws_tx.clone();
                         tokio::spawn(async move {
-                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume { volume: vol })).await;
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::SetVolume { volume: vol }))
+                                .await;
                         });
                     }
                 }
@@ -606,7 +627,9 @@ impl App {
                         let vol = node.volume.saturating_sub(5);
                         let tx = self.ws_tx.clone();
                         tokio::spawn(async move {
-                            let _ = tx.send(ClientMessage::Command(WsCommand::SetVolume { volume: vol })).await;
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::SetVolume { volume: vol }))
+                                .await;
                         });
                     }
                 }
@@ -661,9 +684,9 @@ impl App {
                         let tx = self.ws_tx.clone();
                         let node_id = next_node.id.clone();
                         tokio::spawn(async move {
-                            let _ = tx.send(ClientMessage::Command(WsCommand::SelectNode {
-                                node_id,
-                            })).await;
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::SelectNode { node_id }))
+                                .await;
                         });
                     }
                 }
@@ -774,9 +797,11 @@ impl App {
             if i < queue_len {
                 let tx = self.ws_tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx.send(ClientMessage::Command(WsCommand::RemoveFromQueue {
-                        index: i,
-                    })).await;
+                    let _ = tx
+                        .send(ClientMessage::Command(WsCommand::RemoveFromQueue {
+                            index: i,
+                        }))
+                        .await;
                 });
             }
         }
@@ -792,9 +817,12 @@ impl App {
             if i < queue_len {
                 let tx = self.ws_tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
-                        from: i, to: i - 1,
-                    })).await;
+                    let _ = tx
+                        .send(ClientMessage::Command(WsCommand::MoveInQueue {
+                            from: i,
+                            to: i - 1,
+                        }))
+                        .await;
                 });
                 let _ = idx;
                 self.queue_list.borrow_mut().select(Some(i - 1));
@@ -811,9 +839,12 @@ impl App {
             }
             let tx = self.ws_tx.clone();
             tokio::spawn(async move {
-                let _ = tx.send(ClientMessage::Command(WsCommand::MoveInQueue {
-                    from: i, to: i + 1,
-                })).await;
+                let _ = tx
+                    .send(ClientMessage::Command(WsCommand::MoveInQueue {
+                        from: i,
+                        to: i + 1,
+                    }))
+                    .await;
             });
             let _ = idx;
             self.queue_list.borrow_mut().select(Some(i + 1));
@@ -829,9 +860,9 @@ impl App {
                         if let Some(track) = self.library_browse_tracks().get(i).cloned() {
                             let tx = self.ws_tx.clone();
                             tokio::spawn(async move {
-                                let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                    track,
-                                })).await;
+                                let _ = tx
+                                    .send(ClientMessage::Command(WsCommand::AddToQueue { track }))
+                                    .await;
                             });
                         }
                     }
@@ -845,9 +876,9 @@ impl App {
                     if let Some(track) = self.search_results.get(i).cloned() {
                         let tx = self.ws_tx.clone();
                         tokio::spawn(async move {
-                            let _ = tx.send(ClientMessage::Command(WsCommand::AddToQueue {
-                                track,
-                            })).await;
+                            let _ = tx
+                                .send(ClientMessage::Command(WsCommand::AddToQueue { track }))
+                                .await;
                         });
                     }
                 }
@@ -857,9 +888,9 @@ impl App {
                 if let Some(i) = idx {
                     let tx = self.ws_tx.clone();
                     tokio::spawn(async move {
-                        let _ = tx.send(ClientMessage::Command(WsCommand::PlayIndex {
-                            index: i,
-                        })).await;
+                        let _ = tx
+                            .send(ClientMessage::Command(WsCommand::PlayIndex { index: i }))
+                            .await;
                     });
                 }
             }

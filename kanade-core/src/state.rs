@@ -23,7 +23,9 @@ impl PlaybackState {
     }
 
     pub fn selected_node(&self) -> Option<&Node> {
-        self.selected_node_id.as_deref().and_then(|id| self.node(id))
+        self.selected_node_id
+            .as_deref()
+            .and_then(|id| self.node(id))
     }
 
     pub fn selected_node_mut(&mut self) -> Option<&mut Node> {
@@ -32,10 +34,14 @@ impl PlaybackState {
     }
 
     pub fn sync_top_level_from_selected_node(&mut self) {
-        if let Some((queue, current_index, shuffle, repeat)) = self
-            .selected_node()
-            .map(|node| (node.queue.clone(), node.current_index, node.shuffle, node.repeat))
-        {
+        if let Some((queue, current_index, shuffle, repeat)) = self.selected_node().map(|node| {
+            (
+                node.queue.clone(),
+                node.current_index,
+                node.shuffle,
+                node.repeat,
+            )
+        }) {
             self.queue = queue;
             self.current_index = current_index;
             self.shuffle = shuffle;

@@ -20,7 +20,10 @@ pub struct MpdClient {
 
 impl MpdClient {
     pub fn new(host: impl Into<String>, port: u16) -> Self {
-        Self { host: host.into(), port }
+        Self {
+            host: host.into(),
+            port,
+        }
     }
 
     /// Send one or more MPD commands (newline-terminated) and return the
@@ -28,22 +31,20 @@ impl MpdClient {
     #[instrument(skip(self))]
     pub async fn send(&self, commands: &str) -> Result<Vec<String>, CoreError> {
         let addr = format!("{}:{}", self.host, self.port);
-        let stream = tokio::time::timeout(
-            Duration::from_secs(5),
-            TcpStream::connect(&addr),
-        )
-        .await
-        .map_err(|_| CoreError::Output(format!("timeout connecting to MPD at {addr}")))?
-        .map_err(|e| CoreError::Output(format!("cannot connect to MPD at {addr}: {e}")))?;
+        let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+            .await
+            .map_err(|_| CoreError::Output(format!("timeout connecting to MPD at {addr}")))?
+            .map_err(|e| CoreError::Output(format!("cannot connect to MPD at {addr}: {e}")))?;
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
 
         // Consume the MPD banner: "OK MPD <version>\n"
         let mut banner = String::new();
-        reader.read_line(&mut banner).await.map_err(|e| {
-            CoreError::Output(format!("MPD banner read error: {e}"))
-        })?;
+        reader
+            .read_line(&mut banner)
+            .await
+            .map_err(|e| CoreError::Output(format!("MPD banner read error: {e}")))?;
 
         // Send the command(s)
         writer
@@ -55,9 +56,10 @@ impl MpdClient {
         let mut lines = Vec::new();
         loop {
             let mut line = String::new();
-            reader.read_line(&mut line).await.map_err(|e| {
-                CoreError::Output(format!("MPD read error: {e}"))
-            })?;
+            reader
+                .read_line(&mut line)
+                .await
+                .map_err(|e| CoreError::Output(format!("MPD read error: {e}")))?;
             let trimmed = line.trim_end().to_string();
             if trimmed == "OK" {
                 break;

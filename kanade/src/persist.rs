@@ -1,11 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kanade_core::{
-    model::RepeatMode,
-    ports::StatePersister,
-    state::PlaybackState,
-};
+use kanade_core::{model::RepeatMode, ports::StatePersister, state::PlaybackState};
 use tracing::warn;
 
 pub struct DatabaseStatePersister {
@@ -23,7 +19,8 @@ impl StatePersister for DatabaseStatePersister {
     async fn persist(&self, state: &PlaybackState) {
         let db = Arc::clone(&self.db);
 
-        let queue_file_paths: Vec<String> = state.queue.iter().map(|t| t.file_path.clone()).collect();
+        let queue_file_paths: Vec<String> =
+            state.queue.iter().map(|t| t.file_path.clone()).collect();
         let current_index = state.current_index;
         let selected_node_id = state.selected_node_id.clone();
         let shuffle = state.shuffle;
@@ -44,7 +41,14 @@ impl StatePersister for DatabaseStatePersister {
                     RepeatMode::One => "one",
                     RepeatMode::All => "all",
                 };
-                (node.id.clone(), paths, node.current_index, node.volume, node.shuffle, rep.to_string())
+                (
+                    node.id.clone(),
+                    paths,
+                    node.current_index,
+                    node.volume,
+                    node.shuffle,
+                    rep.to_string(),
+                )
             })
             .collect();
 

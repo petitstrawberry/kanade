@@ -10,8 +10,12 @@ pub enum SoapAction {
     Stop,
     Next,
     Previous,
-    SeekSecondAbsolute { seconds: u32 },
-    SetVolume { volume: u8 },
+    SeekSecondAbsolute {
+        seconds: u32,
+    },
+    SetVolume {
+        volume: u8,
+    },
     /// Any other action — returned as an opaque string so callers can log it.
     Unknown(String),
 }
@@ -42,9 +46,7 @@ pub fn parse_action(soap_body: &str, soap_action_header: &str) -> Result<SoapAct
             Ok(SoapAction::SeekSecondAbsolute { seconds })
         }
         "SetVolume" => {
-            let volume = extract_u32(soap_body, "Value")
-                .unwrap_or(50)
-                .min(100) as u8;
+            let volume = extract_u32(soap_body, "Value").unwrap_or(50).min(100) as u8;
             Ok(SoapAction::SetVolume { volume })
         }
         other => Ok(SoapAction::Unknown(other.to_string())),
@@ -124,8 +126,7 @@ mod tests {
         let body = r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
   <s:Body><u:Play xmlns:u="urn:av-openhome-org:service:Transport:1"/></s:Body>
 </s:Envelope>"#;
-        let action =
-            parse_action(body, "urn:av-openhome-org:service:Transport:1#Play").unwrap();
+        let action = parse_action(body, "urn:av-openhome-org:service:Transport:1#Play").unwrap();
         assert_eq!(action, SoapAction::Play);
     }
 
@@ -155,11 +156,7 @@ mod tests {
     </u:SetVolume>
   </s:Body>
 </s:Envelope>"#;
-        let action = parse_action(
-            body,
-            "urn:av-openhome-org:service:Volume:1#SetVolume",
-        )
-        .unwrap();
+        let action = parse_action(body, "urn:av-openhome-org:service:Volume:1#SetVolume").unwrap();
         assert_eq!(action, SoapAction::SetVolume { volume: 75 });
     }
 

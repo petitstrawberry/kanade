@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use kanade_core::{error::CoreError, ports::AudioOutput};
 use kanade_node_protocol::NodeCommand;
 use tokio::sync::mpsc;
-use tokio::time::{Duration, timeout};
+use tokio::time::{timeout, Duration};
 
 /// [`AudioOutput`] implementation that forwards every call to a connected
 /// output node over the kanade protocol.

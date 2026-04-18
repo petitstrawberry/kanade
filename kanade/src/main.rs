@@ -1,4 +1,10 @@
-use std::{net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
+use std::{
+    future::IntoFuture,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::Result;
 use kanade_core::{
@@ -12,9 +18,7 @@ use kanade_scanner::spawn_background_scan;
 use tracing::{info, warn};
 
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
-use kanade_adapter_ws::{WsBroadcaster, WsServer};
-
-use kanade_server_http::MediaServer;
+use kanade_adapter_ws::{build_router, AppState, WsBroadcaster};
 
 mod persist;
 use persist::DatabaseStatePersister;
@@ -30,18 +34,16 @@ async fn main() -> Result<()> {
 
     info!("Kanade server starting …");
 
-    let media_addr: SocketAddr = std::env::var("MEDIA_ADDR")
+    let bind_addr: SocketAddr = std::env::var("BIND_ADDR")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| "0.0.0.0:8081".parse().unwrap());
+        .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
 
     let server_host = std::env::var("SERVER_HOST").ok();
-    let media_public_base_url = std::env::var("MEDIA_PUBLIC_BASE_URL")
-        .unwrap_or_else(|_| {
-            match &server_host {
-                Some(host) => format!("http://{}:{}", host, media_addr.port()),
-                None => format!("http://127.0.0.1:{}", media_addr.port()),
-            }
+    let media_public_base_url =
+        std::env::var("MEDIA_PUBLIC_BASE_URL").unwrap_or_else(|_| match &server_host {
+            Some(host) => format!("http://{}:{}", host, bind_addr.port()),
+            None => format!("http://127.0.0.1:{}", bind_addr.port()),
         });
 
     let (ws_broadcaster, _ws_rx) = WsBroadcaster::new(64);
@@ -58,8 +60,9 @@ async fn main() -> Result<()> {
         match kanade_plugin_lastfm::LastFmScrobbler::from_env() {
             Ok(scrobbler) => {
                 info!("Last.fm plugin loaded");
-                let bridge = Arc::new(PluginBridge::new(vec![Arc::new(scrobbler)
-                    as std::sync::Arc<dyn kanade_core::plugin::KanadePlugin>]));
+                let bridge =
+                    Arc::new(PluginBridge::new(vec![Arc::new(scrobbler)
+                        as std::sync::Arc<dyn kanade_core::plugin::KanadePlugin>]));
                 b.push(bridge as Arc<dyn EventBroadcaster>);
                 b
             }
@@ -159,10 +162,17 @@ async fn main() -> Result<()> {
 
     core.restore_state(restored).await;
 
-    let media_server = MediaServer::new(PathBuf::from(&db_path), media_addr);
-    tokio::spawn(async move {
-        media_server.run().await;
+    let app_state = Arc::new(AppState {
+        core: Arc::clone(&core),
+        db_path: PathBuf::from(&db_path),
+        broadcaster: Arc::clone(&ws_broadcaster),
+        media_base_url: media_public_base_url,
     });
+    let app = build_router(app_state);
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .expect("failed to bind");
+    info!(addr = %bind_addr, "Kanade server listening");
 
     let _scan_handle = if let Ok(music_dir) = std::env::var("MUSIC_DIR") {
         let scan_interval: u64 = std::env::var("SCAN_INTERVAL_SECS")
@@ -182,34 +192,20 @@ async fn main() -> Result<()> {
         None
     };
 
-    let ws_addr: SocketAddr = std::env::var("WS_ADDR")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| "0.0.0.0:8080".parse().unwrap());
-    let ws_server = WsServer::new(
-        Arc::clone(&core),
-        PathBuf::from(&db_path),
-        Arc::clone(&ws_broadcaster),
-        ws_addr,
-        media_public_base_url,
-    );
-
     let oh_addr: SocketAddr = std::env::var("OH_ADDR")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:8090".parse().unwrap());
-    let oh_server = OpenHomeServer::new(
-        Arc::clone(&core),
-        Arc::clone(&oh_broadcaster),
-        oh_addr,
-    );
+    let oh_server = OpenHomeServer::new(Arc::clone(&core), Arc::clone(&oh_broadcaster), oh_addr);
 
     let core_for_cleanup = Arc::clone(&core);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
-            core_for_cleanup.cleanup_disconnected_nodes(Duration::from_secs(30)).await;
+            core_for_cleanup
+                .cleanup_disconnected_nodes(Duration::from_secs(30))
+                .await;
         }
     });
 
@@ -218,8 +214,7 @@ async fn main() -> Result<()> {
         Ok(mdns) => {
             let mut properties: Vec<(&str, String)> = vec![
                 ("version", "1.0".to_string()),
-                ("ws_port", ws_addr.port().to_string()),
-                ("http_port", media_addr.port().to_string()),
+                ("ws_port", bind_addr.port().to_string()),
             ];
             if let Some(host) = &server_host {
                 properties.push(("host", host.clone()));
@@ -227,13 +222,18 @@ async fn main() -> Result<()> {
             match mdns_sd::ServiceInfo::new(
                 "_kanade._tcp.local.",
                 &mdns_instance_name,
-                &format!("{}.local.", mdns_instance_name.to_lowercase().replace(' ', "-")),
+                &format!(
+                    "{}.local.",
+                    mdns_instance_name.to_lowercase().replace(' ', "-")
+                ),
                 "",
-                ws_addr.port(),
+                bind_addr.port(),
                 properties.as_slice(),
             ) {
                 Ok(info) => match mdns.register(info) {
-                    Ok(_) => info!(instance = %mdns_instance_name, port = ws_addr.port(), "mDNS service registered"),
+                    Ok(_) => {
+                        info!(instance = %mdns_instance_name, port = bind_addr.port(), "mDNS service registered")
+                    }
                     Err(e) => warn!(error = %e, "failed to register mDNS service"),
                 },
                 Err(e) => warn!(error = %e, "failed to create mDNS service info"),
@@ -247,7 +247,7 @@ async fn main() -> Result<()> {
     };
 
     tokio::select! {
-        _ = ws_server.run() => {}
+        _ = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).into_future() => {}
         _ = oh_server.run() => {}
     }
 

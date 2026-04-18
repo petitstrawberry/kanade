@@ -16,10 +16,17 @@ pub struct MpdRenderer {
 }
 
 impl MpdRenderer {
-    pub fn new(host: impl Into<String>, port: u16, media_public_base_url: impl Into<String>) -> Self {
+    pub fn new(
+        host: impl Into<String>,
+        port: u16,
+        media_public_base_url: impl Into<String>,
+    ) -> Self {
         Self {
             client: MpdClient::new(host, port),
-            media_public_base_url: media_public_base_url.into().trim_end_matches('/').to_string(),
+            media_public_base_url: media_public_base_url
+                .into()
+                .trim_end_matches('/')
+                .to_string(),
         }
     }
 
@@ -72,9 +79,7 @@ impl AudioOutput for MpdRenderer {
 
     #[instrument(skip(self))]
     async fn set_volume(&self, volume: u8) -> Result<(), CoreError> {
-        self.client
-            .send(&format!("setvol {volume}\n"))
-            .await?;
+        self.client.send(&format!("setvol {volume}\n")).await?;
         Ok(())
     }
 

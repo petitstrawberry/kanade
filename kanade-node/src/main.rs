@@ -58,10 +58,7 @@ struct NodeEventBroadcaster {
 }
 
 impl NodeEventBroadcaster {
-    fn new(
-        tx: mpsc::Sender<String>,
-        projection_generation: Arc<AtomicU64>,
-    ) -> Self {
+    fn new(tx: mpsc::Sender<String>, projection_generation: Arc<AtomicU64>) -> Self {
         Self {
             tx: tokio::sync::Mutex::new(tx),
             projection_generation,
@@ -104,8 +101,8 @@ async fn main() -> Result<()> {
         .init();
 
     let node_name = std::env::var("NODE_NAME").unwrap_or_else(|_| "node".to_string());
-    let server_addr = std::env::var("SERVER_ADDR")
-        .unwrap_or_else(|_| "ws://127.0.0.1:8080".to_string());
+    let server_addr =
+        std::env::var("SERVER_ADDR").unwrap_or_else(|_| "ws://127.0.0.1:8080".to_string());
     let mpd_host = std::env::var("MPD_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let mpd_port: u16 = std::env::var("MPD_PORT")
         .ok()
@@ -211,12 +208,9 @@ async fn run_session(
 ) -> Result<()> {
     info!("Connecting to {server_addr} …");
 
-    let (ws_stream, _) = tokio::time::timeout(
-        Duration::from_secs(10),
-        connect_async(server_addr),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("connection timed out"))??;
+    let (ws_stream, _) = tokio::time::timeout(Duration::from_secs(10), connect_async(server_addr))
+        .await
+        .map_err(|_| anyhow::anyhow!("connection timed out"))??;
     info!("Connected");
 
     let (mut ws_tx, mut ws_rx) = ws_stream.split();

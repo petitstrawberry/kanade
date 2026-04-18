@@ -107,11 +107,8 @@ impl KanadePlugin for LastFmScrobbler {
                     *started = Some((current.id.clone(), Utc::now()));
                     drop(started);
 
-                    flush_pending_scrobbles(
-                        Arc::clone(&client),
-                        Arc::clone(&pending_scrobbles),
-                    )
-                    .await;
+                    flush_pending_scrobbles(Arc::clone(&client), Arc::clone(&pending_scrobbles))
+                        .await;
 
                     let now_playing = ScrobbleTrack::from_track(&current);
                     if let Err(err) = client.update_now_playing(&now_playing).await {
@@ -216,11 +213,7 @@ mod tests {
             Ok(())
         }
 
-        async fn scrobble(
-            &self,
-            track: &ScrobbleTrack,
-            timestamp: i64,
-        ) -> Result<(), LastFmError> {
+        async fn scrobble(&self, track: &ScrobbleTrack, timestamp: i64) -> Result<(), LastFmError> {
             let mut guard = self.state.lock().expect("mock lock poisoned");
             guard.scrobble_calls.push((track.clone(), timestamp));
 

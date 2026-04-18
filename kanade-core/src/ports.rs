@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::error::CoreError;
 use crate::state::PlaybackState;
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait AudioOutput: Send + Sync {

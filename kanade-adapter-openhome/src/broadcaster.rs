@@ -12,7 +12,9 @@ pub struct OpenHomeBroadcaster {
 
 impl OpenHomeBroadcaster {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { latest: RwLock::new(None) })
+        Arc::new(Self {
+            latest: RwLock::new(None),
+        })
     }
 
     pub async fn current_state(&self) -> Option<PlaybackState> {
@@ -22,7 +24,9 @@ impl OpenHomeBroadcaster {
 
 impl Default for OpenHomeBroadcaster {
     fn default() -> Self {
-        Self { latest: RwLock::new(None) }
+        Self {
+            latest: RwLock::new(None),
+        }
     }
 }
 

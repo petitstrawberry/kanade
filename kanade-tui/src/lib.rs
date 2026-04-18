@@ -1,6 +1,6 @@
 use anyhow::Result;
-use kanade_core::state::PlaybackState;
 use kanade_adapter_ws::{ClientMessage, ServerMessage};
+use kanade_core::state::PlaybackState;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 
@@ -75,19 +75,17 @@ pub enum AppEvent {
 /// Must be called AFTER `enable_raw_mode()`.
 fn spawn_event_task() -> mpsc::Receiver<AppEvent> {
     let (tx, rx) = mpsc::channel::<AppEvent>(32);
-    std::thread::spawn(move || {
-        loop {
-            if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
-                match crossterm::event::read() {
-                    Ok(crossterm::event::Event::Key(key)) => {
-                        if tx.blocking_send(AppEvent::Key(key)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
+    std::thread::spawn(move || loop {
+        if crossterm::event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
+            match crossterm::event::read() {
+                Ok(crossterm::event::Event::Key(key)) => {
+                    if tx.blocking_send(AppEvent::Key(key)).is_err() {
                         break;
                     }
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    break;
                 }
             }
         }

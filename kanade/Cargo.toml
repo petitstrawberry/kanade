@@ -14,7 +14,6 @@ kanade-scanner = { path = "../kanade-scanner" }
 kanade-adapter-node-server = { path = "../kanade-adapter-node-server" }
 kanade-adapter-ws = { path = "../kanade-adapter-ws" }
 kanade-adapter-openhome = { path = "../kanade-adapter-openhome" }
-kanade-server-http = { path = "../kanade-server-http" }
 kanade-plugin-lastfm = { path = "../kanade-plugin-lastfm", optional = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -23,6 +22,8 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
 mdns-sd = "0.19"
 
 [features]

@@ -59,10 +59,13 @@ impl MpdStateSync {
 
     async fn sync_loop(&mut self) -> Result<(), String> {
         let addr = format!("{}:{}", self.host, self.port);
-        let stream = tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(&addr))
-            .await
-            .map_err(|e| format!("connect timeout: {e}"))?
-            .map_err(|e| format!("connect error: {e}"))?;
+        let stream = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        .map_err(|e| format!("connect timeout: {e}"))?
+        .map_err(|e| format!("connect error: {e}"))?;
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -115,9 +118,7 @@ impl MpdStateSync {
             .get("elapsed")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
-        let song = map
-            .get("song")
-            .and_then(|s| s.parse::<usize>().ok());
+        let song = map.get("song").and_then(|s| s.parse::<usize>().ok());
         let volume = map
             .get("volume")
             .and_then(|s| s.parse::<u8>().ok())

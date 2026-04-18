@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use kanade_db::Database;
-use lofty::{probe::Probe, prelude::*};
+use lofty::{prelude::*, probe::Probe};
 use tokio::{
     fs::File,
     io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
@@ -74,9 +74,15 @@ fn parse_id3v2_apic(data: &[u8]) -> Option<lofty::picture::Picture> {
     let version = data[3];
     let flags = data[5];
     let size = if version == 4 {
-        ((data[6] as u64) << 21) | ((data[7] as u64) << 14) | ((data[8] as u64) << 7) | (data[9] as u64)
+        ((data[6] as u64) << 21)
+            | ((data[7] as u64) << 14)
+            | ((data[8] as u64) << 7)
+            | (data[9] as u64)
     } else {
-        ((data[6] as u64) << 24) | ((data[7] as u64) << 16) | ((data[8] as u64) << 8) | (data[9] as u64)
+        ((data[6] as u64) << 24)
+            | ((data[7] as u64) << 16)
+            | ((data[8] as u64) << 8)
+            | (data[9] as u64)
     } as usize;
 
     let has_footer = version == 4 && (flags & 0x10) != 0;
@@ -134,7 +140,9 @@ fn parse_apic_data(data: &[u8], version: u8) -> Option<lofty::picture::Picture> 
     pos += 1;
 
     let mime_end = memchr::memchr(0, &data[pos..])?;
-    let mime = std::str::from_utf8(&data[pos..pos + mime_end]).ok()?.to_string();
+    let mime = std::str::from_utf8(&data[pos..pos + mime_end])
+        .ok()?
+        .to_string();
     pos += mime_end + 1;
 
     let pic_type = lofty::picture::PictureType::from_u8(data[pos]);
@@ -174,7 +182,10 @@ async fn serve_bytes(
     let headers = vec![
         ("Content-Type".to_string(), content_type.to_string()),
         ("Content-Length".to_string(), len.to_string()),
-        ("Cache-Control".to_string(), "public, max-age=86400".to_string()),
+        (
+            "Cache-Control".to_string(),
+            "public, max-age=86400".to_string(),
+        ),
     ];
     write_response_headers(writer, 200, "OK", &headers).await?;
     if method != "HEAD" {
@@ -282,9 +293,21 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
             let content_type = content_type_for_path(&decoded);
             match File::open(&decoded).await {
                 Ok(mut file) => {
-                    if let Err(e) = serve_file_with_range(&mut writer, method, &mut file, content_type, range_header.as_deref()).await {
+                    if let Err(e) = serve_file_with_range(
+                        &mut writer,
+                        method,
+                        &mut file,
+                        content_type,
+                        range_header.as_deref(),
+                    )
+                    .await
+                    {
                         let status = if e.contains("open file:") { 404 } else { 500 };
-                        let text = if status == 404 { "Not Found" } else { "Internal Server Error" };
+                        let text = if status == 404 {
+                            "Not Found"
+                        } else {
+                            "Internal Server Error"
+                        };
                         write_simple_response(&mut writer, status, text, &[]).await?;
                         return Err(e);
                     }
@@ -338,7 +361,11 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
                 let art_type = content_type_for_path(&art_path);
                 if let Err(e) = serve_static_file(&mut writer, method, &art_path, art_type).await {
                     let status = if e.contains("open file:") { 404 } else { 500 };
-                    let text = if status == 404 { "Not Found" } else { "Internal Server Error" };
+                    let text = if status == 404 {
+                        "Not Found"
+                    } else {
+                        "Internal Server Error"
+                    };
                     write_simple_response(&mut writer, status, text, &[]).await?;
                     warn!(album_id = %album_id, path = %art_path, error = %e, "failed to serve artwork file");
                     return Err(e);
@@ -353,7 +380,8 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
                 warn!(album_id = %album_id, error = %e, "artwork not found");
             }
             Err(e) => {
-                write_simple_response(&mut writer, 500, "Internal Server Error", b"db error").await?;
+                write_simple_response(&mut writer, 500, "Internal Server Error", b"db error")
+                    .await?;
                 return Err(format!("db join: {e}"));
             }
         }
@@ -389,7 +417,14 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
     };
 
     let content_type = content_type_for_path(&track.file_path);
-    serve_file_with_range(&mut writer, method, &mut file, content_type, range_header.as_deref()).await?;
+    serve_file_with_range(
+        &mut writer,
+        method,
+        &mut file,
+        content_type,
+        range_header.as_deref(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -418,19 +453,19 @@ async fn serve_file_with_range(
         .map_err(|e| format!("metadata: {e}"))?;
     let total_len = metadata.len();
 
-    let (start, end, status_code, status_text) = match parse_range(range_header.as_deref(), total_len)
-    {
-        Ok(Some((start, end))) => (start, end, 206, "Partial Content"),
-        Ok(None) => (0, total_len.saturating_sub(1), 200, "OK"),
-        Err(()) => {
-            let headers = vec![
-                ("Content-Range".to_string(), format!("bytes */{total_len}")),
-                ("Content-Length".to_string(), "0".to_string()),
-            ];
-            write_response_headers(writer, 416, "Range Not Satisfiable", &headers).await?;
-            return Ok(());
-        }
-    };
+    let (start, end, status_code, status_text) =
+        match parse_range(range_header.as_deref(), total_len) {
+            Ok(Some((start, end))) => (start, end, 206, "Partial Content"),
+            Ok(None) => (0, total_len.saturating_sub(1), 200, "OK"),
+            Err(()) => {
+                let headers = vec![
+                    ("Content-Range".to_string(), format!("bytes */{total_len}")),
+                    ("Content-Length".to_string(), "0".to_string()),
+                ];
+                write_response_headers(writer, 416, "Range Not Satisfiable", &headers).await?;
+                return Ok(());
+            }
+        };
 
     let content_length = if total_len == 0 { 0 } else { end - start + 1 };
     let mut headers = vec![
@@ -543,7 +578,10 @@ async fn write_simple_response(
 ) -> Result<(), String> {
     let headers = vec![
         ("Content-Length".to_string(), body.len().to_string()),
-        ("Content-Type".to_string(), "text/plain; charset=utf-8".to_string()),
+        (
+            "Content-Type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        ),
     ];
     write_response_headers(writer, status, text, &headers).await?;
     if !body.is_empty() {

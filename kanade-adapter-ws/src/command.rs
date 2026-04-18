@@ -11,18 +11,42 @@ pub enum WsCommand {
     Stop,
     Next,
     Previous,
-    Seek { position_secs: f64 },
-    SetVolume { volume: u8 },
-    SetRepeat { repeat: RepeatMode },
-    SetShuffle { shuffle: bool },
-    SelectNode { node_id: String },
-    AddToQueue { track: Track },
-    AddTracksToQueue { tracks: Vec<Track> },
-    PlayIndex { index: usize },
-    RemoveFromQueue { index: usize },
-    MoveInQueue { from: usize, to: usize },
+    Seek {
+        position_secs: f64,
+    },
+    SetVolume {
+        volume: u8,
+    },
+    SetRepeat {
+        repeat: RepeatMode,
+    },
+    SetShuffle {
+        shuffle: bool,
+    },
+    SelectNode {
+        node_id: String,
+    },
+    AddToQueue {
+        track: Track,
+    },
+    AddTracksToQueue {
+        tracks: Vec<Track>,
+    },
+    PlayIndex {
+        index: usize,
+    },
+    RemoveFromQueue {
+        index: usize,
+    },
+    MoveInQueue {
+        from: usize,
+        to: usize,
+    },
     ClearQueue,
-    ReplaceAndPlay { tracks: Vec<Track>, index: usize },
+    ReplaceAndPlay {
+        tracks: Vec<Track>,
+        index: usize,
+    },
     LocalSessionStart {
         device_name: String,
         #[serde(default)]

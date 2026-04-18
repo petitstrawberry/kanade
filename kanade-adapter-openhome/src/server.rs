@@ -22,12 +22,12 @@ pub struct OpenHomeServer {
 }
 
 impl OpenHomeServer {
-    pub fn new(
-        core: Arc<Core>,
-        broadcaster: Arc<OpenHomeBroadcaster>,
-        addr: SocketAddr,
-    ) -> Self {
-        Self { core, broadcaster, addr }
+    pub fn new(core: Arc<Core>, broadcaster: Arc<OpenHomeBroadcaster>, addr: SocketAddr) -> Self {
+        Self {
+            core,
+            broadcaster,
+            addr,
+        }
     }
 
     pub async fn run(self) {
@@ -143,10 +143,7 @@ fn action_name_str(action: &SoapAction) -> &'static str {
     }
 }
 
-async fn dispatch(
-    action: SoapAction,
-    core: &Core,
-) -> Result<(), kanade_core::error::CoreError> {
+async fn dispatch(action: SoapAction, core: &Core) -> Result<(), kanade_core::error::CoreError> {
     match action {
         SoapAction::Play => core.play().await,
         SoapAction::Pause => core.pause().await,

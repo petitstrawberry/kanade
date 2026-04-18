@@ -51,8 +51,7 @@ impl WasmPluginRuntime {
         let mut store = wasmtime::Store::new(&self.engine, HostState::new(self.config.clone()));
 
         let instance =
-            bindings::KanadePlugin::instantiate_async(&mut store, &component, &self.linker)
-                .await?;
+            bindings::KanadePlugin::instantiate_async(&mut store, &component, &self.linker).await?;
 
         // call_name is sync (wasmtime handles async internally)
         let name: String = instance.kanade_plugin_plugin().call_name(&mut store)?;
@@ -99,26 +98,18 @@ fn convert_track(track: &Track) -> TrackInfo {
 
 fn convert_event(event: &PlaybackEvent) -> WitPlaybackEvent {
     match event {
-        PlaybackEvent::TrackChanged { previous, current } => {
-            WitPlaybackEvent::TrackChanged((
-                previous.as_ref().map(convert_track),
-                convert_track(current),
-            ))
-        }
+        PlaybackEvent::TrackChanged { previous, current } => WitPlaybackEvent::TrackChanged((
+            previous.as_ref().map(convert_track),
+            convert_track(current),
+        )),
         PlaybackEvent::PlaybackPaused {
             track,
             position_secs,
-        } => WitPlaybackEvent::PlaybackPaused((
-            track.as_ref().map(convert_track),
-            *position_secs,
-        )),
+        } => WitPlaybackEvent::PlaybackPaused((track.as_ref().map(convert_track), *position_secs)),
         PlaybackEvent::PlaybackResumed {
             track,
             position_secs,
-        } => WitPlaybackEvent::PlaybackResumed((
-            track.as_ref().map(convert_track),
-            *position_secs,
-        )),
+        } => WitPlaybackEvent::PlaybackResumed((track.as_ref().map(convert_track), *position_secs)),
         PlaybackEvent::PlaybackStopped { track } => {
             WitPlaybackEvent::PlaybackStopped(track.as_ref().map(convert_track))
         }

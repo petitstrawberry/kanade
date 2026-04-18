@@ -1,10 +1,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
-use kanade_core::{
-    controller::Core,
-    model::Node,
-};
+use kanade_core::{controller::Core, model::Node};
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -23,11 +20,7 @@ pub struct NodeServer {
 }
 
 impl NodeServer {
-    pub fn new(
-        core: Arc<Core>,
-        addr: SocketAddr,
-        media_base_url: impl Into<String>,
-    ) -> Self {
+    pub fn new(core: Arc<Core>, addr: SocketAddr, media_base_url: impl Into<String>) -> Self {
         Self {
             core,
             addr,
@@ -49,12 +42,7 @@ impl NodeServer {
                 Ok((stream, peer)) => {
                     let core = Arc::clone(&core);
                     let media_base_url = media_base_url.clone();
-                    tokio::spawn(handle_node_connection(
-                        stream,
-                        peer,
-                        core,
-                        media_base_url,
-                    ));
+                    tokio::spawn(handle_node_connection(stream, peer, core, media_base_url));
                 }
                 Err(e) => {
                     error!("NodeServer: accept error: {e}");
@@ -81,31 +69,34 @@ async fn handle_node_connection(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    let registration: NodeRegistration = match tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match ws_rx.next().await {
-                Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
-                    Ok(reg) => break reg,
-                    Err(e) => {
-                        warn!("Node {peer}: malformed registration message: {e}");
+    let registration: NodeRegistration =
+        match tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match ws_rx.next().await {
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str(&text) {
+                        Ok(reg) => break reg,
+                        Err(e) => {
+                            warn!("Node {peer}: malformed registration message: {e}");
+                            return None;
+                        }
+                    },
+                    Some(Ok(Message::Close(_))) | None => {
+                        info!("Node {peer}: disconnected before registering");
                         return None;
                     }
-                },
-                Some(Ok(Message::Close(_))) | None => {
-                    info!("Node {peer}: disconnected before registering");
-                    return None;
+                    _ => continue,
                 }
-                _ => continue,
             }
-        }
-    }).await {
-        Ok(Some(registration)) => registration,
-        Ok(None) => return,
-        Err(_) => {
-            warn!("Node {peer}: registration timed out");
-            return;
-        }
-    };
+        })
+        .await
+        {
+            Ok(Some(registration)) => registration,
+            Ok(None) => return,
+            Err(_) => {
+                warn!("Node {peer}: registration timed out");
+                return;
+            }
+        };
 
     let display_name = registration
         .display_name
@@ -126,7 +117,13 @@ async fn handle_node_connection(
         node_id: node_id.clone(),
         media_base_url,
     };
-    if ws_tx.send(Message::Text(serde_json::to_string(&ack).expect("ack serializable"))).await.is_err() {
+    if ws_tx
+        .send(Message::Text(
+            serde_json::to_string(&ack).expect("ack serializable"),
+        ))
+        .await
+        .is_err()
+    {
         return;
     }
 
@@ -134,7 +131,8 @@ async fn handle_node_connection(
     let connection_id = Uuid::new_v4().to_string();
     let output: Arc<dyn kanade_core::ports::AudioOutput> = Arc::new(RemoteNodeOutput::new(cmd_tx));
 
-    core.register_output(node_id.clone(), connection_id.clone(), Arc::clone(&output)).await;
+    core.register_output(node_id.clone(), connection_id.clone(), Arc::clone(&output))
+        .await;
 
     core.add_node(Node {
         id: node_id.clone(),

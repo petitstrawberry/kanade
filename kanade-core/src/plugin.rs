@@ -27,13 +27,9 @@ pub enum PlaybackEvent {
         position_secs: f64,
     },
     /// Playback was stopped
-    PlaybackStopped {
-        track: Option<Track>,
-    },
+    PlaybackStopped { track: Option<Track> },
     /// Track reached scrobble threshold: played for min(50% duration, 4 minutes), duration > 30s
-    ScrobblePoint {
-        track: Track,
-    },
+    ScrobblePoint { track: Track },
 }
 
 #[async_trait]
@@ -91,7 +87,8 @@ impl PluginBridge {
 
         let prev_track = prev.state.current_track().cloned();
         let current_track = state.current_track().cloned();
-        let track_changed = state.current_index != prev.state.current_index && current_track.is_some();
+        let track_changed =
+            state.current_index != prev.state.current_index && current_track.is_some();
 
         if track_changed {
             events.push(PlaybackEvent::TrackChanged {
@@ -330,12 +327,7 @@ mod tests {
         plugin.clear();
 
         bridge
-            .on_state_changed(&state(
-                queue.clone(),
-                Some(0),
-                PlaybackStatus::Paused,
-                25.0,
-            ))
+            .on_state_changed(&state(queue.clone(), Some(0), PlaybackStatus::Paused, 25.0))
             .await;
         assert_eq!(
             plugin.events(),
