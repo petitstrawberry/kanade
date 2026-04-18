@@ -17,7 +17,7 @@
     searching = true;
     ws.sendRequest({ req: 'search', query }).then(res => {
       if ('search_results' in res) {
-        results = res.search_results;
+        results = res.search_results.tracks;
       }
       searching = false;
     }).catch(err => {

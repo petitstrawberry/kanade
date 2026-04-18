@@ -378,7 +378,7 @@ export class WsClient {
 
     try {
       const response = await this.sendRequest({ req: 'sign_urls', paths });
-      const signedUrlObject = response?.signed_urls ?? {};
+      const signedUrlObject = response?.signed_urls?.urls ?? {};
       const now = Date.now();
       const signedMap = new Map<string, string>();
 

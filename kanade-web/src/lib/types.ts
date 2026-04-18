@@ -87,14 +87,14 @@ export type ServerMessage =
   | { type: "media_auth"; media_auth_key: string; media_auth_key_id: string };
 
 export type WsResponse =
-  | { albums: Album[] }
-  | { album_tracks: Track[] }
-  | { artists: string[] }
-  | { artist_albums: Album[] }
-  | { artist_tracks: Track[] }
-  | { genres: string[] }
-  | { genre_albums: Album[] }
-  | { genre_tracks: Track[] }
-  | { search_results: Track[] }
+  | { albums: { albums: Album[] } }
+  | { album_tracks: { tracks: Track[] } }
+  | { artists: { artists: string[] } }
+  | { artist_albums: { albums: Album[] } }
+  | { artist_tracks: { tracks: Track[] } }
+  | { genres: { genres: string[] } }
+  | { genre_albums: { albums: Album[] } }
+  | { genre_tracks: { tracks: Track[] } }
+  | { search_results: { tracks: Track[] } }
   | { queue: { tracks: Track[]; current_index: number | null } }
-  | { signed_urls: Record<string, string> };
+  | { signed_urls: { urls: Record<string, string> } };

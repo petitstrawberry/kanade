@@ -137,15 +137,15 @@
 
     if (mode === 'albums') {
       ws.sendRequest({ req: 'get_albums' }).then(res => {
-        if ('albums' in res) albums = res.albums;
+        if ('albums' in res) albums = res.albums.albums;
       }).catch(() => {});
     } else if (mode === 'artists') {
       ws.sendRequest({ req: 'get_artists' }).then(res => {
-        if ('artists' in res) artists = res.artists;
+        if ('artists' in res) artists = res.artists.artists;
       }).catch(() => {});
     } else if (mode === 'genres') {
       ws.sendRequest({ req: 'get_genres' }).then(res => {
-        if ('genres' in res) genres = res.genres;
+        if ('genres' in res) genres = res.genres.genres;
       }).catch(() => {});
     }
   }
@@ -162,7 +162,7 @@
     currentTracks = [];
     albums = [];
     ws.sendRequest({ req: 'get_artist_albums', artist }).then(res => {
-      if ('albums' in res) albums = res.albums;
+      if ('artist_albums' in res) albums = res.artist_albums.albums;
     }).catch(() => {});
   }
 
@@ -172,14 +172,14 @@
     currentTracks = [];
     albums = [];
     ws.sendRequest({ req: 'get_genre_albums', genre }).then(res => {
-      if ('albums' in res) albums = res.albums;
+      if ('genre_albums' in res) albums = res.genre_albums.albums;
     }).catch(() => {});
   }
 
   function selectAlbum(album: Album) {
     selectedAlbum = album;
     ws.sendRequest({ req: 'get_album_tracks', album_id: album.id }).then(res => {
-      if ('tracks' in res) currentTracks = res.tracks;
+      if ('album_tracks' in res) currentTracks = res.album_tracks.tracks;
     }).catch(() => {});
   }
 
@@ -205,17 +205,17 @@
 
   function addAlbumTracksToQueue(albumId: string) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: albumId }).then(res => {
-      if ('tracks' in res) {
-        ws.sendCommand({ cmd: 'add_tracks_to_queue', tracks: res.tracks });
-        showToast(`Added ${res.tracks.length} tracks`);
+      if ('album_tracks' in res) {
+        ws.sendCommand({ cmd: 'add_tracks_to_queue', tracks: res.album_tracks.tracks });
+        showToast(`Added ${res.album_tracks.tracks.length} tracks`);
       }
     }).catch(() => {});
   }
 
   function playAlbumFromGrid(album: Album) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: album.id }).then(res => {
-      if ('tracks' in res && res.tracks.length > 0) {
-        ws.sendCommand({ cmd: 'replace_and_play', tracks: res.tracks, index: 0 });
+      if ('album_tracks' in res && res.album_tracks.tracks.length > 0) {
+        ws.sendCommand({ cmd: 'replace_and_play', tracks: res.album_tracks.tracks, index: 0 });
       }
     }).catch(() => {});
   }
