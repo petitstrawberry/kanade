@@ -26,7 +26,52 @@ details later, see [DESIGN.md](DESIGN.md) and [protocols.md](protocols.md).
 - **Built-in media serving** — artwork and track streaming are exposed by the
   server so clients can browse and play from a single place
 
+## Clients
+
+Kanade can be controlled from multiple frontends:
+
+- **Web** — `kanade-web/`, the browser-based client
+- **Terminal** — `kanade-tui`, a terminal UI client
+- **Apple platforms** — the native Kanade app for iOS and macOS:
+  [petitstrawberry/KanadeApp](https://github.com/petitstrawberry/KanadeApp)
+
 ## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose
+- A running [MPD](https://www.musicpd.org/) daemon for your output node
+
+### 1. Start the server
+
+```sh
+docker compose up -d
+```
+
+### 2. Start an output node
+
+On the same host:
+
+```sh
+docker compose --profile node up -d
+```
+
+On a remote host, copy `docker-compose.node.yml` to that machine and run:
+
+```sh
+SERVER_ADDR=kanade.example.com:8080 MPD_HOST=127.0.0.1 \
+  docker compose -f docker-compose.node.yml up -d
+```
+
+The first node to connect is assigned the id `"default"` and is the target
+for clients that don't specify a node.
+
+### 3. Connect a client
+
+- **Web**: open `kanade-web/` (Svelte) — `?server=HOST:8080`
+- **TUI**: build and run `kanade-tui`
+
+## Build from Source
 
 ### Prerequisites
 
@@ -44,9 +89,6 @@ MUSIC_DIR=/path/to/music cargo run -p kanade --release
 ```sh
 cargo run -p kanade-node --release
 ```
-
-The first node to connect is assigned the id `"default"` and is the target
-for clients that don't specify a node.
 
 ### 3. Connect a client
 
@@ -83,31 +125,6 @@ direnv allow   # or: nix develop
 | `MPD_HOST`   | `127.0.0.1`              | Local MPD host                         |
 | `MPD_PORT`   | `6600`                   | Local MPD port                         |
 | `RUST_LOG`   | `kanade_node=info`       | Log filter                             |
-
-## Docker
-
-### Server
-
-```sh
-docker compose up -d
-```
-
-### Output node (same host)
-
-```sh
-docker compose --profile node up -d
-```
-
-Node connects to a host MPD by default (`MPD_HOST=host.docker.internal`).
-
-### Output node (remote host)
-
-Copy `docker-compose.node.yml` to the target machine and run:
-
-```sh
-SERVER_ADDR=kanade.example.com:8080 MPD_HOST=127.0.0.1 \
-  docker compose -f docker-compose.node.yml up -d
-```
 
 ## Architecture
 
