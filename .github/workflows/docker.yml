@@ -238,16 +238,20 @@ jobs:
 
       - name: Create manifest list and push (kanade)
         working-directory: /tmp/digests/kanade
+        env:
+          KANADE_METADATA_JSON: ${{ steps.meta.outputs.json }}
         run: |
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$KANADE_METADATA_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Create manifest list and push (kanade-web)
         working-directory: /tmp/digests/kanade-web
+        env:
+          KANADE_WEB_METADATA_JSON: ${{ steps.meta-web.outputs.json }}
         run: |
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$KANADE_WEB_METADATA_JSON") \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-web@sha256:%s ' *)
 
       - name: Inspect image (kanade)
