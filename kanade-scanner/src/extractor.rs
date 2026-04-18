@@ -162,7 +162,7 @@ fn extract_lofty_track(path: &str) -> Result<Track> {
 }
 
 fn tag_string(tag: &lofty::tag::Tag, key: &ItemKey) -> Option<String> {
-    tag.get_string(key).map(|s: &str| s.to_string())
+    tag.get_string(key.clone()).map(|s| s.to_string())
 }
 
 fn id_of(value: &str) -> String {

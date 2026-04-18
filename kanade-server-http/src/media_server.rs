@@ -162,14 +162,12 @@ fn parse_apic_data(data: &[u8], version: u8) -> Option<lofty::picture::Picture> 
         return None;
     }
 
-    let mime_type = Some(lofty::picture::MimeType::from_str(&mime));
+    let mime_type = lofty::picture::MimeType::from_str(&mime);
 
-    Some(lofty::picture::Picture::new_unchecked(
-        pic_type,
-        mime_type,
-        None,
-        pic_data.to_vec(),
-    ))
+    Some(lofty::picture::Picture::unchecked(pic_data.to_vec())
+        .pic_type(pic_type)
+        .mime_type(mime_type)
+        .build())
 }
 
 async fn serve_bytes(
