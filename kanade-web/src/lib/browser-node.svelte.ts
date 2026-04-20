@@ -1,5 +1,5 @@
-import { AudioPlayer } from './audio-player';
 import type { PlayerState } from './audio-player';
+import type { HlsAudioPlayer } from './hls-player';
 import { buildMediaUrl } from './media-auth';
 import { updateMediaBase, ws as uiWs } from './stores';
 
@@ -20,8 +20,8 @@ type NodeCommand =
   | { type: 'stop' }
   | { type: 'seek'; position_secs: number }
   | { type: 'set_volume'; volume: number }
-  | { type: 'set_queue'; file_paths: string[]; projection_generation: number }
-  | { type: 'add'; file_paths: string[] }
+  | { type: 'set_queue'; file_paths: string[]; track_ids?: string[]; projection_generation: number }
+  | { type: 'add'; file_paths: string[]; track_ids?: string[] }
   | { type: 'remove'; index: number }
   | { type: 'move_track'; from: number; to: number };
 
@@ -53,10 +53,17 @@ function isNodeCommand(value: unknown): value is NodeCommand {
       return (
         Array.isArray(value.file_paths) &&
         value.file_paths.every((v) => typeof v === 'string') &&
+        (value.track_ids === undefined ||
+          (Array.isArray(value.track_ids) && value.track_ids.every((v) => typeof v === 'string'))) &&
         typeof value.projection_generation === 'number'
       );
     case 'add':
-      return Array.isArray(value.file_paths) && value.file_paths.every((v) => typeof v === 'string');
+      return (
+        Array.isArray(value.file_paths) &&
+        value.file_paths.every((v) => typeof v === 'string') &&
+        (value.track_ids === undefined ||
+          (Array.isArray(value.track_ids) && value.track_ids.every((v) => typeof v === 'string')))
+      );
     case 'remove':
       return typeof value.index === 'number';
     case 'move_track':
@@ -67,7 +74,7 @@ function isNodeCommand(value: unknown): value is NodeCommand {
 }
 
 export class BrowserNode {
-  private readonly player: AudioPlayer;
+  private readonly player: HlsAudioPlayer;
   private ws: WebSocket | null = null;
   private wsUrl: string | null = null;
   private name: string | null = null;
@@ -115,7 +122,7 @@ export class BrowserNode {
     this.closeSocket();
   };
 
-  constructor(player: AudioPlayer) {
+  constructor(player: HlsAudioPlayer) {
     this.player = player;
     document.addEventListener('visibilitychange', this.visibilityHandler);
     window.addEventListener('online', this.onlineHandler);
@@ -172,19 +179,22 @@ export class BrowserNode {
     return this.logicalNodeId;
   }
 
-  private async signPaths(filePaths: string[]): Promise<string[]> {
+  private async signPaths(filePaths: string[], trackIds?: string[]): Promise<string[]> {
     const mediaBaseUrl = this.mediaBaseUrl;
     if (!mediaBaseUrl) {
       return filePaths;
     }
 
-    const mediaPaths = filePaths.map((filePath) =>
-      filePath.startsWith('http://') || filePath.startsWith('https://')
-        ? filePath
-        : `/media/file/${encodeURIComponent(filePath)}`,
-    );
+    const HLS_VARIANT = 'lossless';
+    const mediaPaths = filePaths.map((filePath, i) => {
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+      if (trackIds && trackIds[i]) {
+        return `/media/hls/${trackIds[i]}/${HLS_VARIANT}/index.m3u8`;
+      }
+      return `/media/file/${encodeURIComponent(filePath)}`;
+    });
 
-    const signablePaths = mediaPaths.filter((path) => path.startsWith('/media/file/'));
+    const signablePaths = mediaPaths.filter((path) => path.startsWith('/media/'));
     let signed = new Map<string, string>();
 
     if (signablePaths.length > 0) {
@@ -351,12 +361,12 @@ export class BrowserNode {
         this.safePlayerCall(() => this.player.setVolume(command.volume));
         break;
       case 'set_queue': {
-        const signedPaths = await this.signPaths(command.file_paths);
+        const signedPaths = await this.signPaths(command.file_paths, command.track_ids);
         this.safePlayerCall(() => this.player.setQueue(signedPaths, command.projection_generation));
         break;
       }
       case 'add': {
-        const signedPaths = await this.signPaths(command.file_paths);
+        const signedPaths = await this.signPaths(command.file_paths, command.track_ids);
         this.safePlayerCall(() => this.player.addTracks(signedPaths));
         break;
       }

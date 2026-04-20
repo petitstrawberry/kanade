@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { ws, connectBrowserNode, ActiveTab, connectionSettings, toasts, showToast } from '../lib/stores';
+  import { ws, localPlayback, localPlaybackState, ActiveTab, connectionSettings, toasts, showToast } from '../lib/stores';
   import TransportBar from './TransportBar.svelte';
   import NowPlaying from './NowPlaying.svelte';
   import Library from './Library.svelte';
@@ -16,7 +16,6 @@
 
   onMount(() => {
     ws.connect();
-    connectBrowserNode();
 
     const onWsToast = (e: Event) => {
       const message = (e as CustomEvent<{ message?: string }>).detail?.message;
@@ -28,16 +27,10 @@
 
       if (e.key === ' ') {
         e.preventDefault();
-        const nid = ws.selectedNodeId;
-        if (nid) {
-          const node = ws.nodes.find(z => z.id === nid);
-          if (node) {
-            if (node.status === 'playing') {
-              ws.sendCommand({ cmd: 'pause' });
-            } else {
-              ws.sendCommand({ cmd: 'play' });
-            }
-          }
+        if (localPlaybackState.status === 'playing') {
+          localPlayback.pause();
+        } else {
+          localPlayback.play();
         }
       } else if (e.key === '/') {
         e.preventDefault();

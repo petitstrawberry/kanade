@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly, fade } from 'svelte/transition';
-  import { ws } from '../lib/stores';
+  import { localPlayback, localPlaybackState, ws } from '../lib/stores';
   import { formatSampleRate, formatDuration } from '../lib/format';
   import NodePicker from './NodePicker.svelte';
 
   let { visible = false, onClose }: { visible: boolean; onClose: () => void } = $props();
 
-  let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
-  let currentTrack = $derived(ws.queue[ws.currentIndex ?? -1]);
+  let currentTrack = $derived(localPlaybackState.currentTrack);
   let artworkUrl = $state<string | null>(null);
   let artworkError = $state(false);
   let showDetails = $state(false);
@@ -38,49 +37,48 @@
     };
   });
 
-  let isPlaying = $derived(node?.status === 'playing');
-  let position = $derived(node?.position_secs ?? 0);
-  let duration = $derived(currentTrack?.duration_secs ?? 0);
-  let volume = $derived(node?.volume ?? 100);
+  let isPlaying = $derived(localPlaybackState.status === 'playing');
+  let position = $derived(localPlaybackState.positionSecs);
+  let duration = $derived(localPlaybackState.durationSecs);
+  let volume = $derived(localPlaybackState.volume);
 
   function togglePlay(e: Event) {
     e.stopPropagation();
-    if (!node) return;
     if (isPlaying) {
-      ws.sendCommand({ cmd: 'pause' });
+      localPlayback.pause();
     } else {
-      ws.sendCommand({ cmd: 'play' });
+      localPlayback.play();
     }
   }
 
   function playNext(e: Event) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'next' });
+    localPlayback.next();
   }
 
   function playPrev(e: Event) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'previous' });
+    localPlayback.previous();
   }
 
   function seek(e: MouseEvent) {
     e.stopPropagation();
-    if (!duration || !node) return;
+    if (!duration) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const newPos = percent * duration;
-    ws.sendCommand({ cmd: 'seek', position_secs: newPos });
+    localPlayback.seek(newPos);
   }
 
   function setVolume(e: Event) {
     e.stopPropagation();
     const input = e.target as HTMLInputElement;
-    ws.sendCommand({ cmd: 'set_volume', volume: parseInt(input.value) });
+    localPlayback.setVolume(parseInt(input.value));
   }
 
   function toggleShuffle(e: Event) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'set_shuffle', shuffle: !ws.shuffle });
+    localPlayback.setShuffle(!localPlaybackState.shuffleEnabled);
   }
 
   function toggleRepeat(e: Event) {
@@ -90,7 +88,7 @@
       'all': 'one',
       'one': 'off'
     };
-    ws.sendCommand({ cmd: 'set_repeat', repeat: map[ws.repeat] });
+    localPlayback.setRepeat(map[localPlaybackState.repeatMode]);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -179,7 +177,7 @@
           </div>
 
           <div class="buttons">
-            <button class="icon sm" class:active={ws.shuffle} onclick={toggleShuffle} aria-label="Shuffle">
+            <button class="icon sm" class:active={localPlaybackState.shuffleEnabled} onclick={toggleShuffle} aria-label="Shuffle">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 4h9M1 12h9M14 2l-4 4 4 4"></path><path d="M10 2l-4 4 4 4"></path></svg>
             </button>
             <button class="icon" onclick={playPrev} aria-label="Previous">
@@ -195,8 +193,8 @@
             <button class="icon" onclick={playNext} aria-label="Next">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5l10 7-10 7V5z"></path><rect x="17" y="5" width="4" height="14" rx="1"></rect></svg>
             </button>
-            <button class="icon sm" class:active={ws.repeat !== 'off'} onclick={toggleRepeat}>
-              {#if ws.repeat === 'one'}
+            <button class="icon sm" class:active={localPlaybackState.repeatMode !== 'off'} onclick={toggleRepeat}>
+              {#if localPlaybackState.repeatMode === 'one'}
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"></path><path d="M13 5v3h-3"></path><text x="7.5" y="11.5" text-anchor="middle" font-size="7" fill="currentColor" stroke="none" font-family="inherit">1</text></svg>
               {:else}
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8a6 6 0 0112 0"></path><path d="M13 5v3h-3"></path></svg>
@@ -367,6 +365,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
+    line-clamp: 2;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }

@@ -1,28 +1,28 @@
 <script lang="ts">
-  import { ws } from '../lib/stores';
+  import { localPlayback, localPlaybackState } from '../lib/stores';
   import { formatDuration } from '../lib/format';
 
-  let queue = $derived(ws.queue);
-  let currentIndex = $derived(ws.currentIndex ?? -1);
+  let queue = $derived(localPlaybackState.queue);
+  let currentIndex = $derived(localPlaybackState.currentIndex ?? -1);
 
   function playIndex(index: number) {
-    ws.sendCommand({ cmd: 'play_index', index });
+    localPlayback.jumpToIndex(index);
   }
 
   function removeTrack(index: number, e: MouseEvent) {
     e.stopPropagation();
-    ws.sendCommand({ cmd: 'remove_from_queue', index });
+    localPlayback.removeFromQueue(index);
   }
 
   function moveTrack(from: number, to: number, e: MouseEvent) {
     e.stopPropagation();
     if (to >= 0 && to < queue.length) {
-      ws.sendCommand({ cmd: 'move_in_queue', from, to });
+      localPlayback.moveInQueue(from, to);
     }
   }
 
   function clearQueue() {
-    ws.sendCommand({ cmd: 'clear_queue' });
+    localPlayback.clearQueue();
   }
 </script>
 

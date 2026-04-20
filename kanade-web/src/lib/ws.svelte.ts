@@ -378,11 +378,14 @@ export class WsClient {
 
     try {
       const response = await this.sendRequest({ req: 'sign_urls', paths });
-      const signedUrlObject = response?.signed_urls?.urls ?? {};
+      const signedUrlObject = isStringRecord(response?.signed_urls?.urls)
+        ? response.signed_urls.urls
+        : {};
       const now = Date.now();
       const signedMap = new Map<string, string>();
 
-      for (const [path, url] of Object.entries(signedUrlObject)) {
+      for (const path in signedUrlObject) {
+        const url = signedUrlObject[path];
         signedMap.set(path, url);
         this.signedUrlCache.set(path, { url, expiresAt: now + SIGNED_URL_TTL_MS });
       }
@@ -406,4 +409,12 @@ export class WsClient {
       resolver.reject(error);
     }
   }
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.values(value).every((entry) => typeof entry === 'string')
+  );
 }

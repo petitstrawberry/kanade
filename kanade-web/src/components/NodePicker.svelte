@@ -1,11 +1,19 @@
 <script lang="ts">
-  import { ws } from '../lib/stores';
+  import { localPlaybackState } from '../lib/stores';
 
-  let node = $derived(ws.selectedNodeId ? ws.nodes.find(n => n.id === ws.selectedNodeId) : undefined);
+  let nodes = $derived([
+    {
+      id: 'local',
+      name: 'Local Playback',
+      connected: true,
+      status: localPlaybackState.status
+    }
+  ]);
+  let node = $derived(nodes[0]);
   let showNodePicker = $state(false);
 </script>
 
-{#if ws.nodes.length > 1}
+{#if nodes.length > 1}
   <div class="node-picker" onclick={(e) => e.stopPropagation()} role="presentation">
     <button class="node-btn" onclick={() => showNodePicker = !showNodePicker}>
       <span class="node-name">{node?.name ?? '—'}</span>
@@ -13,9 +21,8 @@
     </button>
     {#if showNodePicker}
       <div class="node-menu">
-        {#each ws.nodes.filter(n => n.connected) as n (n.id)}
+        {#each nodes.filter(n => n.connected) as n (n.id)}
           <button class="node-option" class:active={n.id === node?.id} onclick={() => {
-            ws.sendCommand({ cmd: 'select_node', node_id: n.id });
             showNodePicker = false;
           }}>
             {n.name}

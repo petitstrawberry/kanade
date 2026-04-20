@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ws, showToast } from '../lib/stores';
+  import { localPlayback, ws, showToast } from '../lib/stores';
   import type { Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
 
@@ -33,12 +33,12 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', track });
+    localPlayback.addToQueue(track);
     showToast(`Added: ${track.title || 'Track'}`);
   }
 
-  function playNow(track: Track, tracks: Track[], index: number) {
-    ws.sendCommand({ cmd: 'replace_and_play', tracks, index });
+  function playNow(_track: Track, tracks: Track[], index: number) {
+    localPlayback.playTracks(tracks, index);
   }
 </script>
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ws, showToast } from '../lib/stores';
+  import { localPlayback, ws, showToast } from '../lib/stores';
   import type { Album, Track } from '../lib/types';
   import { formatDuration } from '../lib/format';
   import { tick } from 'svelte';
@@ -195,18 +195,18 @@
   }
 
   function addToQueue(track: Track) {
-    ws.sendCommand({ cmd: 'add_to_queue', track });
+    localPlayback.addToQueue(track);
     showToast(`Added: ${track.title || 'Track'}`);
   }
 
-  function playNow(track: Track, tracks: Track[], index: number) {
-    ws.sendCommand({ cmd: 'replace_and_play', tracks, index });
+  function playNow(_track: Track, tracks: Track[], index: number) {
+    localPlayback.playTracks(tracks, index);
   }
 
   function addAlbumTracksToQueue(albumId: string) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: albumId }).then(res => {
       if ('album_tracks' in res) {
-        ws.sendCommand({ cmd: 'add_tracks_to_queue', tracks: res.album_tracks.tracks });
+        localPlayback.addTracksToQueue(res.album_tracks.tracks);
         showToast(`Added ${res.album_tracks.tracks.length} tracks`);
       }
     }).catch(() => {});
@@ -215,18 +215,18 @@
   function playAlbumFromGrid(album: Album) {
     ws.sendRequest({ req: 'get_album_tracks', album_id: album.id }).then(res => {
       if ('album_tracks' in res && res.album_tracks.tracks.length > 0) {
-        ws.sendCommand({ cmd: 'replace_and_play', tracks: res.album_tracks.tracks, index: 0 });
+        localPlayback.playTracks(res.album_tracks.tracks, 0);
       }
     }).catch(() => {});
   }
 
   function addAlbumToQueue() {
-    ws.sendCommand({ cmd: 'add_tracks_to_queue', tracks: currentTracks });
+    localPlayback.addTracksToQueue(currentTracks);
     showToast(`Added ${currentTracks.length} tracks`);
   }
 
   function playAlbumNow() {
-    ws.sendCommand({ cmd: 'replace_and_play', tracks: currentTracks, index: 0 });
+    localPlayback.playTracks(currentTracks, 0);
   }
 
   function markAlbumArtworkError(albumId: string) {
@@ -569,6 +569,7 @@
     font-weight: 500;
     color: var(--fg);
     display: -webkit-box;
+    line-clamp: 2;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;

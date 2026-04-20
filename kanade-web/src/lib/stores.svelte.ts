@@ -1,6 +1,6 @@
 import { WsClient } from './ws';
-import { AudioPlayer } from './audio-player';
-import { BrowserNode } from './browser-node';
+import { HlsAudioPlayer } from './hls-player';
+import { LocalPlaybackController, type LocalPlaybackState } from './local-playback';
 
 const params = new URLSearchParams(window.location.search);
 const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -64,8 +64,46 @@ export const ws = new WsClient(
   buildWsUrl(resolveServerValue(initialSavedServer), sameOriginWsFallback),
 );
 
-const player = new AudioPlayer(() => {});
-export function getPlayer(): AudioPlayer {
+const defaultLocalPlaybackState: LocalPlaybackState = {
+  queue: [],
+  currentIndex: null,
+  currentTrack: null,
+  status: 'stopped',
+  positionSecs: 0,
+  durationSecs: 0,
+  volume: 100,
+  repeatMode: 'off',
+  shuffleEnabled: false,
+};
+
+export let localPlaybackState = $state<LocalPlaybackState>({ ...defaultLocalPlaybackState });
+
+let localPlaybackController: LocalPlaybackController;
+const player = new HlsAudioPlayer((state) => {
+  localPlaybackController?.syncFromPlayerState(state);
+});
+
+function assignLocalPlaybackState(state: LocalPlaybackState): void {
+  localPlaybackState.queue = state.queue;
+  localPlaybackState.currentIndex = state.currentIndex;
+  localPlaybackState.currentTrack = state.currentTrack;
+  localPlaybackState.status = state.status;
+  localPlaybackState.positionSecs = state.positionSecs;
+  localPlaybackState.durationSecs = state.durationSecs;
+  localPlaybackState.volume = state.volume;
+  localPlaybackState.repeatMode = state.repeatMode;
+  localPlaybackState.shuffleEnabled = state.shuffleEnabled;
+}
+
+localPlaybackController = new LocalPlaybackController(
+  player,
+  (paths) => ws.signUrls(paths),
+  assignLocalPlaybackState,
+);
+
+export const localPlayback = localPlaybackController;
+
+export function getPlayer(): HlsAudioPlayer {
   return player;
 }
 
@@ -121,14 +159,11 @@ export class ConnectionSettings {
 
   disconnect(): void {
     ws.disconnect();
-    browserNode.disconnect();
     showToast('Disconnected.');
   }
 }
 
 export const connectionSettings = new ConnectionSettings();
-
-export const browserNode = new BrowserNode(player);
 
 export function getMediaBase(): string {
   return mediaBase;
@@ -143,24 +178,26 @@ function reconnectClients(savedServer: string | null): void {
   currentWsUrl = buildWsUrl(resolveServerValue(savedServer), sameOriginWsFallback);
   mediaBase = sameOriginMediaFallback;
   ws.reconnectTo(currentWsUrl);
-  connectBrowserNode();
-}
-
-export function connectBrowserNode(): void {
-  const nodeWs = new URL(currentWsUrl);
-  nodeWs.pathname = '/ws';
-  nodeWs.search = '';
-  nodeWs.hash = '';
-  const nodeWsUrl = nodeWs.toString();
-  const nodeName = `Browser (${navigator.userAgent.includes('iPhone') ? 'iPhone' : navigator.userAgent.includes('iPad') ? 'iPad' : 'Desktop'})`;
-  browserNode.connect(nodeWsUrl, nodeName);
 }
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
     ws.disconnect();
-    browserNode.destroy();
+    localPlayback.destroy();
   });
+}
+
+class BrowserNodeCompat {
+  connected = $state(true);
+  connect() { this.connected = true; }
+  disconnect() { this.connected = false; }
+  destroy() { this.connected = false; }
+}
+
+export const browserNode = new BrowserNodeCompat();
+
+export function connectBrowserNode(): void {
+  browserNode.connect();
 }
 
 export class ActiveTab {
