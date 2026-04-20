@@ -110,6 +110,7 @@ direnv allow   # or: nix develop
 | ----------------------- | ------------------------------ | -------------------------------------- |
 | `MUSIC_DIR`             | —                              | Root music directory for scanning      |
 | `DB_PATH`               | `kanade.db`                    | SQLite database file path              |
+| `HLS_CACHE_DIR`         | *`DB_PATH` parent* `/.hls-cache` | HLS segment cache directory (on-demand fMP4 remux) |
 | `SCAN_INTERVAL_SECS`    | `300`                          | Interval between periodic scans        |
 | `PUBLIC_HOST`           | —                              | Public hostname or URL (mDNS, media URLs, client-facing). Set to your domain when using a reverse proxy (e.g. `kanade.example.com`). Can include scheme and port. |
 | `BIND_ADDR`             | `0.0.0.0:8080`                 | Unified server bind address (WS + HTTP) |
