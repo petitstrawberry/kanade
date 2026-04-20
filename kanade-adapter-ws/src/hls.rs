@@ -931,12 +931,18 @@ fn remux_pcm_as_alac(
     let output_format = alac_output_format(sample_rate, DEFAULT_FRAMES_PER_PACKET, channels_u32, bit_depth);
     let mut encoder = AlacEncoder::new(&output_format);
     let magic_cookie = encoder.magic_cookie();
+    let mut alac_inner_box = Vec::with_capacity(12 + magic_cookie.len());
+    let inner_size = (12 + magic_cookie.len()) as u32;
+    alac_inner_box.extend_from_slice(&inner_size.to_be_bytes());
+    alac_inner_box.extend_from_slice(b"alac");
+    alac_inner_box.extend_from_slice(&0u32.to_be_bytes());
+    alac_inner_box.extend_from_slice(&magic_cookie);
     let sample_entry = Arc::new(unknown_audio_sample_entry(
         *b"alac",
         sample_rate,
         channels,
         bit_depth,
-        magic_cookie,
+        alac_inner_box,
     )?);
 
     let mut packet_buffer = vec![0u8; output_format.max_packet_size()];
