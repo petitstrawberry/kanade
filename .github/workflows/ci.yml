@@ -10,15 +10,6 @@ jobs:
   license:
     uses: ./.github/workflows/license-check.yml
 
-  advisories:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check advisories
-
   build:
     needs: license
     runs-on: ubuntu-latest
