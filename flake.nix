@@ -47,8 +47,6 @@
           mpc
           tmux
           nodejs_22
-          cargo-deny
-          cargo-about
         ];
       in
       {
@@ -61,6 +59,13 @@
             echo "🦀 Kanade dev shell"
             echo "  rustc  $(rustc --version)"
             echo "  cargo  $(cargo --version)"
+
+            for tool in cargo-deny cargo-about; do
+              if ! command -v $tool &>/dev/null; then
+                echo "📦 $tool not found — installing..."
+                cargo install --locked $tool
+              fi
+            done
           '';
         };
       }

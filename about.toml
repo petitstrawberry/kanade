@@ -31,3 +31,9 @@ accepted = ["Unicode-DFS-2016"]
 
 [webpki-roots]
 accepted = ["MPL-2.0"]
+
+[ittapi]
+accepted = ["BSD-3-Clause"]
+
+[ittapi-sys]
+accepted = ["BSD-3-Clause"]
