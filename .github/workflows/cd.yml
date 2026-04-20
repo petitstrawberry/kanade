@@ -1,9 +1,9 @@
-name: Docker CI
+name: CD
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
 
 env:
@@ -11,87 +11,8 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # ── Build amd64 + smoke test ──────────────────────────────
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
-        if: github.event_name == 'push'
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/metadata-action@v5
-        id: meta
-        with:
-          images: ${{ env.REGISTRY }}/kanade
-          tags: |
-            type=sha
-            type=ref,event=branch
-
-      - uses: docker/metadata-action@v5
-        id: meta-web
-        with:
-          images: ${{ env.REGISTRY }}/kanade-web
-          tags: |
-            type=sha
-            type=ref,event=branch
-
-      - name: Build kanade (amd64 native)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          load: true
-          tags: ghcr.io/petitstrawberry/kanade:main
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build kanade-web (amd64 native)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile.web
-          load: true
-          tags: ghcr.io/petitstrawberry/kanade-web:main
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Smoke test - compose up
-        run: |
-          mkdir -p ./music
-          docker compose up -d
-          sleep 5
-
-      - name: Smoke test - Web UI
-        run: curl -sf --max-time 10 http://localhost:3000 | grep -q 'Kanade'
-
-      - name: Smoke test - kanade server health
-        run: |
-          timeout 10s docker compose logs kanade | grep -q 'Kanade server listening'
-          ! timeout 10s docker compose logs kanade | grep -q 'Media HTTP server listening on 0.0.0.0:8081'
-          docker compose logs kanade
-
-      - name: Logs on failure
-        if: failure()
-        run: docker compose logs
-
-      - name: Tear down
-        if: always()
-        run: docker compose down -v
-
-  # ── Push per-platform (native runners) ────────────────────
   push:
-    needs: build
-    if: github.event_name == 'push'
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

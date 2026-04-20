@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  license:
+    uses: ./.github/workflows/license-check.yml
+
+  advisories:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+
+  build:
+    needs: license
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build kanade (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          tags: ghcr.io/petitstrawberry/kanade:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build kanade-web (amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          load: true
+          tags: ghcr.io/petitstrawberry/kanade-web:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test - compose up
+        run: |
+          mkdir -p ./music
+          docker compose up -d
+          sleep 5
+
+      - name: Smoke test - Web UI
+        run: curl -sf --max-time 10 http://localhost:3000 | grep -q 'Kanade'
+
+      - name: Smoke test - kanade server health
+        run: |
+          timeout 10s docker compose logs kanade | grep -q 'Kanade server listening'
+          ! timeout 10s docker compose logs kanade | grep -q 'Media HTTP server listening on 0.0.0.0:8081'
+          docker compose logs kanade
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
