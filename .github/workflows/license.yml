@@ -6,27 +6,21 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - '**/Cargo.toml'
       - '**/Cargo.lock'
+      - '**/Cargo.toml'
       - 'deny.toml'
-      - 'about.toml'
 
 jobs:
-  cargo-deny-licenses:
+  cargo-deny:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check
-          arguments: --all-features -k licenses
-
-  cargo-deny-advisories:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
-          arguments: --all-features -k advisories
+          command: check ${{ matrix.checks }}
