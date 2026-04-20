@@ -1,8 +1,9 @@
 use std::{
+    collections::HashMap,
     future::IntoFuture,
     net::SocketAddr,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
 
@@ -179,6 +180,7 @@ async fn main() -> Result<()> {
         media_base_url: media_public_base_url,
         media_key_store,
         hls_cache,
+        local_session_owners: Arc::new(RwLock::new(HashMap::new())),
     });
     let app = build_router(app_state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

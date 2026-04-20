@@ -393,6 +393,19 @@ impl Core {
         Ok(())
     }
 
+    pub async fn local_session_disconnect(&self, node_id: &str) -> Result<(), CoreError> {
+        {
+            let mut s = self.state.write().await;
+            let node = s.node_mut(node_id).ok_or(CoreError::LocalSessionNotFound)?;
+            if node.node_type != NodeType::Local {
+                return Err(CoreError::LocalSessionNotFound);
+            }
+            node.connected = false;
+        }
+        self.broadcast().await;
+        Ok(())
+    }
+
     pub async fn local_session_update(
         &self,
         node_id: &str,

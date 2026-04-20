@@ -23,7 +23,7 @@ use futures_util::{
 };
 use hmac::{Hmac, KeyInit, Mac};
 use kanade_adapter_node_server::RemoteNodeOutput;
-use kanade_core::{controller::Core, model::Node};
+use kanade_core::{controller::Core, error::CoreError, model::Node};
 use kanade_db::Database;
 use kanade_node_protocol::NodeRegistration;
 use lofty::{prelude::*, probe::Probe};
@@ -85,6 +85,7 @@ pub struct AppState {
     pub media_base_url: String,
     pub media_key_store: Arc<MediaKeyStore>,
     pub hls_cache: Arc<HlsCache>,
+    pub local_session_owners: Arc<RwLock<HashMap<String, String>>>,
 }
 
 enum ArtResult {
@@ -622,7 +623,10 @@ async fn run_ui_mode(
     }
 
     if let Some(nid) = local_node_id {
-        let _ = state.core.local_session_stop(&nid).await;
+        release_local_session_owner(&state.local_session_owners, &nid, &key_id);
+        if let Err(e) = state.core.local_session_disconnect(&nid).await {
+            warn!(error = %e, node_id = %nid, "local_session_disconnect error");
+        }
     }
     state.media_key_store.revoke(&key_id);
     info!(peer = %peer, key_id = %key_id, "revoked media key");
@@ -638,7 +642,14 @@ async fn handle_ui_client_message(
 ) {
     match msg {
         ClientMessage::Command(cmd) => {
-            dispatch_command(cmd, &state.core, local_node_id).await;
+            dispatch_command(
+                cmd,
+                &state.core,
+                &state.local_session_owners,
+                local_node_id,
+                media_auth_key_id,
+            )
+            .await;
         }
         ClientMessage::Request { req_id, req } => {
             info!(peer = %peer, request = ?req, "WS request");
@@ -651,6 +662,35 @@ async fn handle_ui_client_message(
         ClientMessage::NodeRegistration(_) | ClientMessage::NodeStateUpdate(_) => {
             warn!(peer = %peer, "WS node message on UI connection");
         }
+    }
+}
+
+fn local_session_owner(
+    owners: &Arc<RwLock<HashMap<String, String>>>,
+    node_id: &str,
+) -> Option<String> {
+    owners.read().unwrap().get(node_id).cloned()
+}
+
+fn claim_local_session_owner(
+    owners: &Arc<RwLock<HashMap<String, String>>>,
+    node_id: &str,
+    connection_id: &str,
+) {
+    owners
+        .write()
+        .unwrap()
+        .insert(node_id.to_string(), connection_id.to_string());
+}
+
+fn release_local_session_owner(
+    owners: &Arc<RwLock<HashMap<String, String>>>,
+    node_id: &str,
+    connection_id: &str,
+) {
+    let mut owners = owners.write().unwrap();
+    if owners.get(node_id).map(|owner| owner.as_str()) == Some(connection_id) {
+        owners.remove(node_id);
     }
 }
 
@@ -831,7 +871,13 @@ async fn run_node_mode(
     info!(peer = %peer, node_id = %node_id, key_id = %key_id, "revoked media key");
 }
 
-async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Option<String>) {
+async fn dispatch_command(
+    cmd: WsCommand,
+    core: &Core,
+    local_session_owners: &Arc<RwLock<HashMap<String, String>>>,
+    local_node_id: &mut Option<String>,
+    connection_id: &str,
+) {
     info!(command = ?cmd, "WS command");
 
     let is_queue_op = matches!(
@@ -892,20 +938,75 @@ async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Optio
         WsCommand::LocalSessionStart {
             device_name,
             device_id,
-        } => match core
-            .local_session_start(&device_name, device_id.as_deref())
-            .await
-        {
-            Ok(node_id) => {
-                *local_node_id = Some(node_id);
-                Ok(())
+        } => {
+            if let Some(did) = device_id.as_deref() {
+                let conflicting_owner = {
+                    let state = core.state_handle();
+                    let state = state.read().await;
+                    state
+                        .nodes
+                        .iter()
+                        .find(|n| {
+                            n.node_type == kanade_core::model::NodeType::Local
+                                && n.device_id.as_deref() == Some(did)
+                        })
+                        .and_then(|node| {
+                            let node_id = node.id.clone();
+                            local_session_owner(local_session_owners, &node_id)
+                                .filter(|owner| owner != connection_id)
+                        })
+                };
+
+                if conflicting_owner.is_some() {
+                    Err(kanade_core::error::CoreError::Internal(
+                        "local session already owned by another connection".into(),
+                    ))
+                } else {
+                    match core.local_session_start(&device_name, Some(did)).await {
+                        Ok(node_id) => {
+                            if let Some(old_node_id) = local_node_id.replace(node_id.clone()) {
+                                if old_node_id != node_id {
+                                    release_local_session_owner(
+                                        local_session_owners,
+                                        &old_node_id,
+                                        connection_id,
+                                    );
+                                }
+                            }
+                            claim_local_session_owner(local_session_owners, &node_id, connection_id);
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            } else {
+                match core.local_session_start(&device_name, None).await {
+                    Ok(node_id) => {
+                        if let Some(old_node_id) = local_node_id.replace(node_id.clone()) {
+                            if old_node_id != node_id {
+                                release_local_session_owner(
+                                    local_session_owners,
+                                    &old_node_id,
+                                    connection_id,
+                                );
+                            }
+                        }
+                        claim_local_session_owner(local_session_owners, &node_id, connection_id);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
             }
-            Err(e) => Err(e),
-        },
+        }
         WsCommand::LocalSessionStop => {
             if let Some(ref nid) = *local_node_id {
-                if let Err(e) = core.local_session_stop(nid).await {
-                    warn!(error = %e, "local_session_stop error");
+                if local_session_owner(local_session_owners, nid).as_deref() == Some(connection_id) {
+                    if let Err(e) = core.local_session_stop(nid).await {
+                        warn!(error = %e, "local_session_stop error");
+                    }
+                    release_local_session_owner(local_session_owners, nid, connection_id);
+                } else {
+                    warn!(node_id = %nid, "Rejected local_session_stop from non-owner connection");
                 }
                 *local_node_id = None;
             }
@@ -921,20 +1022,29 @@ async fn dispatch_command(cmd: WsCommand, core: &Core, local_node_id: &mut Optio
             shuffle,
         } => {
             if let Some(ref nid) = *local_node_id {
-                if let Err(e) = core
-                    .local_session_update(
-                        nid,
-                        tracks,
-                        index,
-                        position_secs,
-                        status,
-                        volume,
-                        repeat,
-                        shuffle,
-                    )
-                    .await
-                {
-                    warn!(error = %e, "local_session_update error");
+                if local_session_owner(local_session_owners, nid).as_deref() == Some(connection_id) {
+                    if let Err(e) = core
+                        .local_session_update(
+                            nid,
+                            tracks,
+                            index,
+                            position_secs,
+                            status,
+                            volume,
+                            repeat,
+                            shuffle,
+                        )
+                        .await
+                    {
+                        if matches!(e, CoreError::LocalSessionNotFound) {
+                            release_local_session_owner(local_session_owners, nid, connection_id);
+                            *local_node_id = None;
+                        }
+                        warn!(error = %e, "local_session_update error");
+                    }
+                } else {
+                    warn!(node_id = %nid, "Rejected local_session_update from non-owner connection");
+                    *local_node_id = None;
                 }
             }
             Ok(())
