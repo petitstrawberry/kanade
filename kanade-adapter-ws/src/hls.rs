@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::{BufWriter, Write},
     num::NonZeroU32,
@@ -8,6 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use alac_encoder::{AlacEncoder, FormatDescription, PcmFormat, DEFAULT_FRAMES_PER_PACKET};
 use hls_m3u8::{
     MediaPlaylist, MediaSegment,
     tags::{ExtInf, ExtXMap},
@@ -304,6 +306,55 @@ struct FlacStreamInfo {
     channels: u8,
     bits_per_sample: u8,
     max_block_size: u16,
+}
+
+const MAX_FMP4_AUDIO_SAMPLE_RATE: u32 = u16::MAX as u32;
+
+struct AlacPcm16;
+struct AlacPcm20;
+struct AlacPcm24;
+struct AlacPcm32;
+
+impl PcmFormat for AlacPcm16 {
+    fn bits() -> u32 { 16 }
+    fn bytes() -> u32 { 2 }
+    fn flags() -> u32 { 4 }
+}
+
+impl PcmFormat for AlacPcm20 {
+    fn bits() -> u32 { 20 }
+    fn bytes() -> u32 { 3 }
+    fn flags() -> u32 { 4 }
+}
+
+impl PcmFormat for AlacPcm24 {
+    fn bits() -> u32 { 24 }
+    fn bytes() -> u32 { 3 }
+    fn flags() -> u32 { 4 }
+}
+
+impl PcmFormat for AlacPcm32 {
+    fn bits() -> u32 { 32 }
+    fn bytes() -> u32 { 4 }
+    fn flags() -> u32 { 4 }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+enum AlacFormatType {
+    AppleLossless,
+    LinearPcm,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+struct AlacFormatDescriptionLayout {
+    sample_rate: f64,
+    format_id: AlacFormatType,
+    bytes_per_packet: u32,
+    frames_per_packet: u32,
+    channels_per_frame: u32,
+    bits_per_channel: u32,
 }
 
 fn remux_source(source_path: &Path, segment_duration: Duration) -> Result<RemuxedTrack, HlsError> {
@@ -718,6 +769,15 @@ fn remux_wav(source_path: &Path, properties: &lofty::properties::FileProperties)
     let sample_rate = properties.sample_rate().unwrap_or(wav.sample_rate);
     let channels = properties.channels().unwrap_or(wav.channels);
     let bit_depth = properties.bit_depth().unwrap_or(wav.bits_per_sample);
+    if sample_rate > MAX_FMP4_AUDIO_SAMPLE_RATE {
+        return remux_pcm_as_alac(
+            &bytes[wav.data_offset..wav.data_offset + wav.data_len],
+            sample_rate,
+            channels,
+            bit_depth,
+            false,
+        );
+    }
     let timescale = nonzero(sample_rate)?;
     let entry = Arc::new(unknown_audio_sample_entry(*b"lpcm", sample_rate, channels, bit_depth, Vec::new())?);
     let bytes_per_frame = (u32::from(channels) * u32::from(bit_depth) / 8).max(1) as usize;
@@ -742,6 +802,15 @@ fn remux_aiff(source_path: &Path, properties: &lofty::properties::FileProperties
     let sample_rate = properties.sample_rate().unwrap_or(aiff.sample_rate);
     let channels = properties.channels().unwrap_or(aiff.channels);
     let bit_depth = properties.bit_depth().unwrap_or(aiff.bits_per_sample);
+    if sample_rate > MAX_FMP4_AUDIO_SAMPLE_RATE {
+        return remux_pcm_as_alac(
+            &bytes[aiff.data_offset..aiff.data_offset + aiff.data_len],
+            sample_rate,
+            channels,
+            bit_depth,
+            true,
+        );
+    }
     let timescale = nonzero(sample_rate)?;
     let entry = Arc::new(unknown_audio_sample_entry(*b"lpcm", sample_rate, channels, bit_depth, Vec::new())?);
     let bytes_per_frame = (u32::from(channels) * u32::from(bit_depth) / 8).max(1) as usize;
@@ -836,6 +905,171 @@ fn pcm_chunks(
     }
 
     samples
+}
+
+fn remux_pcm_as_alac(
+    pcm_bytes: &[u8],
+    sample_rate: u32,
+    channels: u8,
+    bit_depth: u8,
+    source_big_endian: bool,
+) -> Result<RemuxedTrack, HlsError> {
+    let channels_u32 = u32::from(channels);
+    let bytes_per_sample = pcm_bytes_per_sample(bit_depth)?;
+    let bytes_per_frame = bytes_per_sample.saturating_mul(channels as usize);
+    if bytes_per_frame == 0 {
+        return Err(HlsError::InvalidData("PCM frame size must be non-zero".to_string()));
+    }
+    if pcm_bytes.len() % bytes_per_frame != 0 {
+        return Err(HlsError::InvalidData(
+            "PCM payload was not aligned to whole audio frames".to_string(),
+        ));
+    }
+
+    let normalized_pcm = pcm_to_alac_bytes(pcm_bytes, bit_depth, source_big_endian)?;
+    let input_format = alac_pcm_input_format(sample_rate, channels_u32, bit_depth)?;
+    let output_format = alac_output_format(sample_rate, DEFAULT_FRAMES_PER_PACKET, channels_u32, bit_depth);
+    let mut encoder = AlacEncoder::new(&output_format);
+    let magic_cookie = encoder.magic_cookie();
+    let sample_entry = Arc::new(unknown_audio_sample_entry(
+        *b"alac",
+        sample_rate,
+        channels,
+        bit_depth,
+        magic_cookie,
+    )?);
+
+    let mut packet_buffer = vec![0u8; output_format.max_packet_size()];
+    let chunk_bytes = DEFAULT_FRAMES_PER_PACKET as usize * bytes_per_frame;
+    let mut payload = Vec::new();
+    let mut samples = Vec::new();
+
+    for pcm_chunk in normalized_pcm.chunks(chunk_bytes) {
+        let frame_count = pcm_chunk.len() / bytes_per_frame;
+        if frame_count == 0 {
+            continue;
+        }
+
+        let start = payload.len();
+        let encoded_size = encoder.encode(&input_format, pcm_chunk, &mut packet_buffer);
+        payload.extend_from_slice(&packet_buffer[..encoded_size]);
+        let end = payload.len();
+        samples.push(RemuxSampleRef {
+            range: start..end,
+            duration: frame_count as u32,
+            sample_entry: None,
+            keyframe: true,
+            composition_time_offset: None,
+        });
+    }
+
+    if samples.is_empty() {
+        return Err(HlsError::InvalidData("no ALAC packets were produced from PCM input".to_string()));
+    }
+
+    Ok(RemuxedTrack {
+        timescale: nonzero(sample_rate)?,
+        bytes: payload.into(),
+        sample_entry: Some(sample_entry),
+        samples,
+    })
+}
+
+fn alac_pcm_input_format(
+    sample_rate: u32,
+    channels: u32,
+    bit_depth: u8,
+) -> Result<FormatDescription, HlsError> {
+    Ok(match bit_depth {
+        16 => FormatDescription::pcm::<AlacPcm16>(sample_rate as f64, channels),
+        20 => FormatDescription::pcm::<AlacPcm20>(sample_rate as f64, channels),
+        24 => FormatDescription::pcm::<AlacPcm24>(sample_rate as f64, channels),
+        32 => FormatDescription::pcm::<AlacPcm32>(sample_rate as f64, channels),
+        _ => {
+            return Err(HlsError::Unsupported(
+                "ALAC remux only supports 16/20/24/32-bit PCM input",
+            ));
+        }
+    })
+}
+
+fn pcm_bytes_per_sample(bit_depth: u8) -> Result<usize, HlsError> {
+    match bit_depth {
+        16 => Ok(2),
+        20 | 24 => Ok(3),
+        32 => Ok(4),
+        _ => Err(HlsError::Unsupported(
+            "ALAC remux only supports 16/20/24/32-bit PCM input",
+        )),
+    }
+}
+
+fn pcm_to_alac_bytes<'a>(
+    pcm_bytes: &'a [u8],
+    bit_depth: u8,
+    source_big_endian: bool,
+) -> Result<Cow<'a, [u8]>, HlsError> {
+    let bytes_per_sample = pcm_bytes_per_sample(bit_depth)?;
+    let target_big_endian = matches!(bit_depth, 20 | 24);
+    if source_big_endian == target_big_endian {
+        return Ok(Cow::Borrowed(pcm_bytes));
+    }
+
+    let mut converted = Vec::with_capacity(pcm_bytes.len());
+    for sample in pcm_bytes.chunks_exact(bytes_per_sample) {
+        for byte in sample.iter().rev() {
+            converted.push(*byte);
+        }
+    }
+    Ok(Cow::Owned(converted))
+}
+
+fn alac_output_format(
+    sample_rate: u32,
+    frames_per_packet: u32,
+    channels: u32,
+    bit_depth: u8,
+) -> FormatDescription {
+    const _: () = assert!(
+        std::mem::size_of::<AlacFormatDescriptionLayout>() == std::mem::size_of::<FormatDescription>(),
+        "AlacFormatDescriptionLayout must match FormatDescription size"
+    );
+
+    let layout = AlacFormatDescriptionLayout {
+        sample_rate: sample_rate as f64,
+        format_id: AlacFormatType::AppleLossless,
+        bytes_per_packet: 0,
+        frames_per_packet,
+        channels_per_frame: channels,
+        bits_per_channel: u32::from(bit_depth),
+    };
+
+    // Safety: AlacFormatDescriptionLayout and FormatDescription have identical
+    // field types in identical order, both using the default Rust representation.
+    // We verify size equality at compile time above.
+    let fmt: FormatDescription = unsafe { std::mem::transmute(layout) };
+
+    // Runtime safety check: verify the transmute preserved the field values.
+    // If this fails, the Rust compiler has given the two structs different layouts
+    // and we cannot safely transmute between them.
+    let fmt_bytes = unsafe {
+        std::slice::from_raw_parts(
+            &fmt as *const FormatDescription as *const u8,
+            std::mem::size_of::<FormatDescription>(),
+        )
+    };
+    let layout_bytes = unsafe {
+        std::slice::from_raw_parts(
+            &layout as *const AlacFormatDescriptionLayout as *const u8,
+            std::mem::size_of::<AlacFormatDescriptionLayout>(),
+        )
+    };
+    assert_eq!(
+        fmt_bytes, layout_bytes,
+        "transmute round-trip failed: layout mismatch between AlacFormatDescriptionLayout and FormatDescription"
+    );
+
+    fmt
 }
 
 fn mp4a_entry(
@@ -1882,5 +2116,208 @@ mod tests {
         assert!(segments.init_path().exists());
         assert!(segments.playlist_path().exists());
         assert!(segments.segment_count() >= 1);
+    }
+
+    fn generate_test_aiff(dir: &Path, sample_rate: u32, bits_per_sample: u8, channels: u8, duration_secs: f64) -> PathBuf {
+        let num_frames = (sample_rate as f64 * duration_secs).round() as u32;
+        let bytes_per_sample = (bits_per_sample as usize + 7) / 8;
+        let bytes_per_frame = channels as usize * bytes_per_sample;
+        let data_len = num_frames as usize * bytes_per_frame;
+
+        let comm_size: u32 = 18;
+        let ssnd_size: u32 = 8 + data_len as u32;
+        let form_size = 4 + 8 + comm_size + 8 + ssand_size_padded(ssnd_size);
+
+        let mut out = Vec::with_capacity(12 + form_size as usize);
+
+        // FORM header
+        out.extend_from_slice(b"FORM");
+        out.extend_from_slice(&form_size.to_be_bytes());
+        out.extend_from_slice(b"AIFF");
+
+        // COMM chunk
+        out.extend_from_slice(b"COMM");
+        out.extend_from_slice(&comm_size.to_be_bytes());
+        out.extend_from_slice(&(channels as u16).to_be_bytes());
+        out.extend_from_slice(&num_frames.to_be_bytes());
+        out.extend_from_slice(&(bits_per_sample as u16).to_be_bytes());
+        out.extend_from_slice(&encode_aiff_sample_rate(sample_rate));
+
+        // SSND chunk
+        out.extend_from_slice(b"SSND");
+        out.extend_from_slice(&ssnd_size.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes());
+        out.extend(std::iter::repeat(0u8).take(data_len));
+        if data_len % 2 != 0 {
+            out.push(0);
+        }
+
+        let path = dir.join(format!("test_{sample_rate}_{bits_per_sample}bit_{channels}ch.aiff"));
+        std::fs::write(&path, &out).unwrap();
+        path
+    }
+
+    fn ssand_size_padded(ssnd_size: u32) -> u32 {
+        let data_len = ssnd_size - 8;
+        ssnd_size + (data_len % 2)
+    }
+
+    /// Encode a sample rate as AIFF 80-bit extended (simplified for integer rates).
+    fn encode_aiff_sample_rate(rate: u32) -> [u8; 10] {
+        // For integer sample rates, the 80-bit extended format is:
+        // sign(1) | exponent(15) | mantissa(64)
+        // value = mantissa * 2^(exponent - 16383 - 63)
+        // For rate = N, we need mantissa * 2^(exp - 16446) = N
+        // Simple approach: find the highest set bit, set exponent accordingly
+        let mut mantissa = rate as u64;
+        let mut shift = 0i32;
+        if rate > 0 {
+            while mantissa < (1u64 << 63) {
+                mantissa <<= 1;
+                shift += 1;
+            }
+        }
+        let exponent = (16446 - shift) as u16; // 16383 + 63 - shift
+        let sign_bit: u16 = 0; // positive
+        let exp_field = sign_bit | exponent;
+        let mut buf = [0u8; 10];
+        buf[0..2].copy_from_slice(&exp_field.to_be_bytes());
+        buf[2..10].copy_from_slice(&mantissa.to_be_bytes());
+        buf
+    }
+
+    /// Generate a minimal WAV file with the given parameters.
+    fn generate_test_wav(dir: &Path, sample_rate: u32, bits_per_sample: u8, channels: u8, duration_secs: f64) -> PathBuf {
+        let num_frames = (sample_rate as f64 * duration_secs).round() as u32;
+        let bytes_per_sample = (bits_per_sample as usize + 7) / 8;
+        let data_len = num_frames as usize * channels as usize * bytes_per_sample;
+
+        let fmt_size: u32 = 16;
+        let file_size = 36 + data_len as u32;
+
+        let mut out = Vec::with_capacity(44 + data_len);
+
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&file_size.to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&fmt_size.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&(channels as u16).to_le_bytes());
+        out.extend_from_slice(&sample_rate.to_le_bytes());
+        let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+        out.extend_from_slice(&byte_rate.to_le_bytes());
+        let block_align = channels as u16 * bytes_per_sample as u16;
+        out.extend_from_slice(&block_align.to_le_bytes());
+        out.extend_from_slice(&(bits_per_sample as u16).to_le_bytes());
+
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(data_len as u32).to_le_bytes());
+        out.extend(std::iter::repeat(0u8).take(data_len));
+
+        let path = dir.join(format!("test_{sample_rate}_{bits_per_sample}bit_{channels}ch.wav"));
+        std::fs::write(&path, &out).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_alac_remux_96khz_32bit_aiff() {
+        let dir = tempfile::tempdir().unwrap();
+        let aiff_path = generate_test_aiff(dir.path(), 96000, 32, 2, 0.5);
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let segments = generate_hls(&aiff_path, "alac-test-96k-32bit", "lossless", cache_dir.path())
+            .expect("HLS generation from 96kHz AIFF should succeed via ALAC");
+
+        assert!(segments.init_path().exists());
+        let init_data = std::fs::read(segments.init_path()).unwrap();
+        assert!(
+            init_data.windows(4).any(|w| w == b"alac"),
+            "init.mp4 should contain ALAC sample entry, got: {:?}",
+            &init_data[..init_data.len().min(100)]
+        );
+
+        assert!(segments.playlist_path().exists());
+        assert!(segments.segment_count() >= 1);
+
+        let seg0 = segments.segment_path(0).unwrap();
+        let seg_data = std::fs::read(&seg0).unwrap();
+        assert!(!seg_data.is_empty());
+    }
+
+    #[test]
+    fn test_alac_remux_96khz_16bit_aiff() {
+        let dir = tempfile::tempdir().unwrap();
+        let aiff_path = generate_test_aiff(dir.path(), 96000, 16, 2, 0.5);
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let segments = generate_hls(&aiff_path, "alac-test-96k-16bit", "lossless", cache_dir.path())
+            .expect("HLS generation from 96kHz 16-bit AIFF should succeed via ALAC");
+
+        assert!(segments.init_path().exists());
+        let init_data = std::fs::read(segments.init_path()).unwrap();
+        assert!(
+            init_data.windows(4).any(|w| w == b"alac"),
+            "init.mp4 should contain ALAC sample entry for 96kHz 16-bit"
+        );
+        assert!(segments.segment_count() >= 1);
+    }
+
+    #[test]
+    fn test_lpcm_remux_44khz_aiff_stays_lpcm() {
+        let dir = tempfile::tempdir().unwrap();
+        let aiff_path = generate_test_aiff(dir.path(), 44100, 16, 2, 0.5);
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let segments = generate_hls(&aiff_path, "lpcm-test-44k", "lossless", cache_dir.path())
+            .expect("HLS generation from 44.1kHz AIFF should succeed via LPCM");
+
+        assert!(segments.init_path().exists());
+        let init_data = std::fs::read(segments.init_path()).unwrap();
+        assert!(
+            !init_data.windows(4).any(|w| w == b"alac"),
+            "44.1kHz AIFF should use LPCM, not ALAC"
+        );
+        assert!(
+            init_data.windows(4).any(|w| w == b"lpcm"),
+            "44.1kHz AIFF should use LPCM sample entry"
+        );
+    }
+
+    #[test]
+    fn test_alac_remux_96khz_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = generate_test_wav(dir.path(), 96000, 24, 2, 0.5);
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let segments = generate_hls(&wav_path, "alac-test-96k-wav", "lossless", cache_dir.path())
+            .expect("HLS generation from 96kHz WAV should succeed via ALAC");
+
+        assert!(segments.init_path().exists());
+        let init_data = std::fs::read(segments.init_path()).unwrap();
+        assert!(
+            init_data.windows(4).any(|w| w == b"alac"),
+            "init.mp4 should contain ALAC sample entry for 96kHz WAV"
+        );
+        assert!(segments.segment_count() >= 1);
+    }
+
+    #[test]
+    fn test_alac_remux_mono() {
+        let dir = tempfile::tempdir().unwrap();
+        let aiff_path = generate_test_aiff(dir.path(), 96000, 24, 1, 0.5);
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let segments = generate_hls(&aiff_path, "alac-test-mono", "lossless", cache_dir.path())
+            .expect("HLS generation from mono 96kHz AIFF should succeed via ALAC");
+
+        assert!(segments.init_path().exists());
+        let init_data = std::fs::read(segments.init_path()).unwrap();
+        assert!(
+            init_data.windows(4).any(|w| w == b"alac"),
+            "init.mp4 should contain ALAC sample entry for mono"
+        );
     }
 }

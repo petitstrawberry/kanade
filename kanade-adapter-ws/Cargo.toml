@@ -27,6 +27,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 rand = "0.8"
 subtle = "2"
+alac-encoder = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
