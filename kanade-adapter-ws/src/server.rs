@@ -32,6 +32,7 @@ use serde::Deserialize;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use tokio::{
+    fs,
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
     sync::mpsc,
@@ -43,6 +44,7 @@ use uuid::Uuid;
 use crate::{
     broadcaster::WsBroadcaster,
     command::{ClientMessage, ServerMessage, WsCommand, WsNodeCommand, WsRequest, WsResponse},
+    hls::HlsCache,
 };
 
 const RECONNECT_GRACE_MS: u64 = 5000;
@@ -82,6 +84,7 @@ pub struct AppState {
     pub broadcaster: Arc<WsBroadcaster>,
     pub media_base_url: String,
     pub media_key_store: Arc<MediaKeyStore>,
+    pub hls_cache: Arc<HlsCache>,
 }
 
 enum ArtResult {
@@ -109,6 +112,18 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/media/tracks/{track_id}", get(media_track_handler))
         .route("/media/art/{album_id}", get(media_art_handler))
         .route("/media/file/{*path}", get(media_file_handler))
+        .route(
+            "/media/hls/{track_id}/{variant}/index.m3u8",
+            get(hls_playlist_handler),
+        )
+        .route(
+            "/media/hls/{track_id}/{variant}/init.mp4",
+            get(hls_init_handler),
+        )
+        .route(
+            "/media/hls/{track_id}/{variant}/{segment_name}",
+            get(hls_segment_handler),
+        )
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -338,6 +353,172 @@ async fn media_file_handler(
         None,
     )
     .await
+}
+
+#[instrument(skip(state, method))]
+async fn hls_playlist_handler(
+    State(state): State<Arc<AppState>>,
+    Path((track_id, variant)): Path<(String, String)>,
+    OriginalUri(uri): OriginalUri,
+    Query(auth_query): Query<MediaAuthQuery>,
+    method: Method,
+) -> Response<Body> {
+    let canonical_path = uri.path().to_owned();
+    if let Err(status) = verify_media_auth(&state, &canonical_path, &auth_query) {
+        return body_response(status, Body::empty());
+    }
+
+    match resolve_hls_segments(&state, &track_id, &variant).await {
+        Ok(segments) => match fs::read_to_string(segments.playlist_path()).await {
+            Ok(text) => {
+                // Rewrite relative URIs to absolute signed URLs so AVPlayer can
+                // fetch init.mp4 and segN.m4s without losing auth query params.
+                let key = state
+                    .media_key_store
+                    .get(&auth_query.kid)
+                    .unwrap_or_else(|| [0u8; 32]);
+                let rewritten = rewrite_m3u8_with_signed_urls(
+                    &text,
+                    &state.media_base_url,
+                    &track_id,
+                    &variant,
+                    &auth_query.kid,
+                    &key,
+                    auth_query.exp,
+                );
+                bytes_response(
+                    StatusCode::OK,
+                    &method,
+                    "application/vnd.apple.mpegurl",
+                    Some("public, max-age=60"),
+                    rewritten.into_bytes(),
+                )
+            }
+            Err(_) => simple_response(StatusCode::NOT_FOUND, "Not Found"),
+        },
+        Err(status) => body_response(status, Body::empty()),
+    }
+}
+
+#[instrument(skip(state, method))]
+async fn hls_init_handler(
+    State(state): State<Arc<AppState>>,
+    Path((track_id, variant)): Path<(String, String)>,
+    OriginalUri(uri): OriginalUri,
+    Query(auth_query): Query<MediaAuthQuery>,
+    method: Method,
+) -> Response<Body> {
+    let canonical_path = uri.path().to_owned();
+    if let Err(status) = verify_media_auth(&state, &canonical_path, &auth_query) {
+        return body_response(status, Body::empty());
+    }
+
+    match resolve_hls_segments(&state, &track_id, &variant).await {
+        Ok(segments) => match fs::read(segments.init_path()).await {
+            Ok(data) => bytes_response(
+                StatusCode::OK,
+                &method,
+                "video/mp4",
+                Some("public, max-age=31536000, immutable"),
+                data,
+            ),
+            Err(_) => simple_response(StatusCode::NOT_FOUND, "Not Found"),
+        },
+        Err(status) => body_response(status, Body::empty()),
+    }
+}
+
+#[instrument(skip(state, method))]
+async fn hls_segment_handler(
+    State(state): State<Arc<AppState>>,
+    Path((track_id, variant, segment_name)): Path<(String, String, String)>,
+    OriginalUri(uri): OriginalUri,
+    Query(auth_query): Query<MediaAuthQuery>,
+    method: Method,
+) -> Response<Body> {
+    let canonical_path = uri.path().to_owned();
+    if let Err(status) = verify_media_auth(&state, &canonical_path, &auth_query) {
+        return body_response(status, Body::empty());
+    }
+
+    // segment_name is either "init.mp4" or "seg{N}.m4s"
+    if segment_name == "init.mp4" {
+        return hls_serve_init(&state, &track_id, &variant, &method).await;
+    }
+
+    let segment_index = segment_name
+        .strip_prefix("seg")
+        .and_then(|s| s.strip_suffix(".m4s"))
+        .and_then(|s| s.parse::<usize>().ok());
+
+    let Some(segment_index) = segment_index else {
+        return simple_response(StatusCode::NOT_FOUND, "Not Found");
+    };
+
+    match resolve_hls_segments(&state, &track_id, &variant).await {
+        Ok(segments) => {
+            let Some(segment_path) = segments.segment_path(segment_index) else {
+                return simple_response(StatusCode::NOT_FOUND, "Not Found");
+            };
+            match fs::read(segment_path).await {
+                Ok(data) => bytes_response(
+                    StatusCode::OK,
+                    &method,
+                    "video/mp4",
+                    Some("public, max-age=31536000, immutable"),
+                    data,
+                ),
+                Err(_) => simple_response(StatusCode::NOT_FOUND, "Not Found"),
+            }
+        }
+        Err(status) => body_response(status, Body::empty()),
+    }
+}
+
+async fn hls_serve_init(
+    state: &Arc<AppState>,
+    track_id: &str,
+    variant: &str,
+    method: &Method,
+) -> Response<Body> {
+    match resolve_hls_segments(state, track_id, variant).await {
+        Ok(segments) => {
+            let init_path = segments.init_path();
+            match fs::read(init_path).await {
+                Ok(data) => bytes_response(
+                    StatusCode::OK,
+                    method,
+                    "video/mp4",
+                    Some("public, max-age=31536000, immutable"),
+                    data,
+                ),
+                Err(_) => simple_response(StatusCode::NOT_FOUND, "Not Found"),
+            }
+        }
+        Err(status) => body_response(status, Body::empty()),
+    }
+}
+
+async fn resolve_hls_segments(
+    state: &Arc<AppState>,
+    track_id: &str,
+    variant: &str,
+) -> Result<crate::hls::HlsSegments, StatusCode> {
+    let db_path = state.db_path.clone();
+    let track_id_owned = track_id.to_string();
+    let track = tokio::task::spawn_blocking(move || {
+        let db = Database::open(&db_path).ok()?;
+        db.get_track_by_id(&track_id_owned).ok()?
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    state
+        .hls_cache
+        .get_or_generate(std::path::Path::new(&track.file_path), track_id, variant)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn run_ui_mode(
@@ -1060,6 +1241,31 @@ fn verify_media_auth(
     } else {
         Err(StatusCode::FORBIDDEN)
     }
+}
+
+fn rewrite_m3u8_with_signed_urls(
+    m3u8: &str,
+    media_base_url: &str,
+    track_id: &str,
+    variant: &str,
+    kid: &str,
+    key: &[u8; 32],
+    exp: u64,
+) -> String {
+    let mut out = String::with_capacity(m3u8.len() * 2);
+    for line in m3u8.lines() {
+        if line.starts_with("#EXT-X-MAP:URI=") {
+            let signed = build_signed_media_url(media_base_url, &format!("/media/hls/{track_id}/{variant}/init.mp4"), kid, key, exp);
+            out.push_str(&format!("#EXT-X-MAP:URI=\"{signed}\""));
+        } else if !line.starts_with('#') && !line.is_empty() {
+            let signed = build_signed_media_url(media_base_url, &format!("/media/hls/{track_id}/{variant}/{line}"), kid, key, exp);
+            out.push_str(&signed);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn build_signed_media_url(

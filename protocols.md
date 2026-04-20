@@ -358,6 +358,50 @@ Content-Length: 1024
 - `/media/art/<album_id>` serves album artwork from either a discovered artwork
   path or embedded cover art extracted from the first track in the album.
 
+### 3.4 HLS Streaming (fMP4)
+
+HTTP Live Streaming endpoints for on-demand audio streaming. Audio files are remuxed (not transcoded) into fMP4 segments and cached on disk. First request generates segments; subsequent requests serve from cache.
+
+**Endpoints:**
+
+| Endpoint | Content-Type | Description |
+|---|---|---|
+| `GET /media/hls/{track_id}/{variant}/index.m3u8` | `application/vnd.apple.mpegurl` | HLS playlist (VOD, EXT-X-INDEPENDENT-SEGMENTS) |
+| `GET /media/hls/{track_id}/{variant}/init.mp4` | `video/mp4` | Initialization segment (ftyp + moov) |
+| `GET /media/hls/{track_id}/{variant}/seg{N}.m4s` | `video/mp4` | Media segment N (moof + mdat) |
+
+**Authentication:** Same signed URL mechanism as other /media/* endpoints (kid/exp/sig query parameters).
+
+**Variant:** Quality profile name, used for future ABR support. Current valid value: `lossless` (remux without transcoding).
+
+**Supported formats for remux:**
+
+| Source Format | fMP4 Codec | FourCC |
+|---|---|---|
+| FLAC | FLAC (lossless) | `fLaC` |
+| AAC (ADTS / M4A) | AAC | `mp4a` |
+| ALAC (M4A) | ALAC | `alac` |
+| MP3 | MP3 | `.mp3` |
+| WAV (PCM) | LPCM | `lpcm` |
+| AIFF (PCM) | LPCM | `lpcm` |
+| Opus (Ogg) | Opus | `Opus` |
+
+Formats not listed (DSD, APE, Ogg Vorbis) are not supported for HLS streaming.
+
+**On-demand generation:**
+1. Client requests `index.m3u8` with signed URL
+2. Server checks cache (`.hls-cache/{track_id}/{variant}/`)
+3. Cache miss: remux source file into fMP4 segments (6-second duration)
+4. Cache hit: serve cached segments directly
+5. LRU eviction when cache exceeds configured limit (default 10GB)
+
+**Future ABR extension:**
+- `lossless` variant: source format remuxed as-is (current)
+- `high` variant: AAC 256kbps transcoded (future)
+- `low` variant: AAC 128kbps transcoded (future)
+- `master.m3u8`: master playlist referencing all variants (future)
+- Directory structure (`{track_id}/{variant}/`) already supports multiple variants
+
 ---
 
 ## External Protocols

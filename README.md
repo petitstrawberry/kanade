@@ -25,6 +25,7 @@ details later, see [DESIGN.md](DESIGN.md) and [protocols.md](protocols.md).
   local [MPD](https://www.musicpd.org/) daemon
 - **Built-in media serving** — artwork and track streaming are exposed by the
   server so clients can browse and play from a single place
+- **HLS streaming** — on-demand fMP4 remuxing for iOS/macOS clients (AVPlayer-compatible), with LRU disk cache and future ABR support
 
 ## Clients
 
@@ -154,7 +155,7 @@ needed.
                                                                              └──────────────┘
 
   :8080  /ws      WebSocket (clients + output nodes)
-         /media/  HTTP media surface (track streaming + artwork)
+         /media/  HTTP media surface (track streaming + artwork + HLS)
 ```
 
 For implementation details and design decisions, see [DESIGN.md](DESIGN.md).
@@ -165,6 +166,7 @@ For implementation details and design decisions, see [DESIGN.md](DESIGN.md).
 | -------- | ---- | --------- | ------ |
 | WebSocket | 8080 (`/ws`) | Server ↔ All clients | WebSocket JSON |
 | Media Surface | 8080 (`/media/`) | Clients → Server | HTTP |
+| HLS Streaming | 8080 (`/media/hls/`) | Clients → Server | HTTP (fMP4/HLS) |
 
 See [protocols.md](protocols.md) for detailed protocol specifications.
 
@@ -179,7 +181,7 @@ See [protocols.md](protocols.md) for detailed protocol specifications.
 | `kanade-node-protocol`     | Shared Kanade Protocol message types              |
 | `kanade-adapter-mpd`       | MPD audio backend (used by `kanade-node`)         |
 | `kanade-adapter-node-server`| Server-side node handler (merged into kanade-adapter-ws) |
-| `kanade-adapter-ws`        | WebSocket + HTTP media (axum unified router)     |
+| `kanade-adapter-ws`        | WebSocket + HTTP media + HLS remux (axum unified router) |
 | `kanade-server-http`       | HTTP media file serving (superseded by kanade-adapter-ws) |
 | `kanade-node`              | Output node binary (connects to server, drives MPD) |
 | `kanade-tui`               | Terminal UI client (ratatui)                      |

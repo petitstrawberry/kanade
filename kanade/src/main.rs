@@ -18,7 +18,7 @@ use kanade_scanner::spawn_background_scan;
 use tracing::{info, warn};
 
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
-use kanade_adapter_ws::{build_router, AppState, MediaKeyStore, WsBroadcaster};
+use kanade_adapter_ws::{build_router, AppState, HlsCache, MediaKeyStore, WsBroadcaster};
 
 mod persist;
 use persist::DatabaseStatePersister;
@@ -170,6 +170,7 @@ async fn main() -> Result<()> {
     core.restore_state(restored).await;
 
     let media_key_store = Arc::new(MediaKeyStore::new());
+    let hls_cache = Arc::new(HlsCache::from_env());
 
     let app_state = Arc::new(AppState {
         core: Arc::clone(&core),
@@ -177,6 +178,7 @@ async fn main() -> Result<()> {
         broadcaster: Arc::clone(&ws_broadcaster),
         media_base_url: media_public_base_url,
         media_key_store,
+        hls_cache,
     });
     let app = build_router(app_state);
     let listener = tokio::net::TcpListener::bind(bind_addr)
