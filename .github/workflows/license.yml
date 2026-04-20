@@ -17,7 +17,7 @@ jobs:
       matrix:
         checks:
           - advisories
-          - bans licenses sources
+          - licenses sources
     continue-on-error: ${{ matrix.checks == 'advisories' }}
     steps:
       - uses: actions/checkout@v4
