@@ -112,10 +112,14 @@ impl HlsCache {
     }
 
     pub fn from_env() -> Self {
-        let root = std::env::var("MUSIC_DIR")
+        let root = std::env::var("HLS_CACHE_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(".hls-cache");
+            .unwrap_or_else(|_| {
+                std::env::var("MUSIC_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(".hls-cache")
+            });
         Self::new(root)
     }
 

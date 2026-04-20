@@ -11,6 +11,7 @@ services:
     environment:
       MUSIC_DIR: /music
       DB_PATH: /data/kanade.db
+      HLS_CACHE_DIR: /data/hls-cache
       BIND_ADDR: "0.0.0.0:8080"
       PUBLIC_HOST: "${PUBLIC_HOST:-}"
       OH_ADDR: "0.0.0.0:8090"
