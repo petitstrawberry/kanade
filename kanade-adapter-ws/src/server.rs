@@ -518,7 +518,10 @@ async fn resolve_hls_segments(
         .hls_cache
         .get_or_generate(std::path::Path::new(&track.file_path), track_id, variant)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|e| {
+            warn!(error = %e, track_id = %track_id, "HLS get_or_generate failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })
 }
 
 async fn run_ui_mode(
