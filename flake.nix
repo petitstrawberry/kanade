@@ -47,6 +47,8 @@
           mpc
           tmux
           nodejs_22
+          cargo-deny
+          cargo-about
         ];
       in
       {

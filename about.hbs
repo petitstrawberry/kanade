@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kanade - Third Party Licenses</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; color: #333; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+.subtitle { color: #666; margin-bottom: 2rem; }
+.crate { margin-bottom: 2rem; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; }
+.crate-header { background: #f8f9fa; padding: 12px 16px; border-bottom: 1px solid #e0e0e0; }
+.crate-name { font-weight: 600; font-size: 1rem; }
+.crate-version { color: #666; font-size: 0.875rem; margin-left: 8px; }
+.crate-license { margin-top: 4px; font-size: 0.875rem; }
+.crate-license a { color: #0066cc; text-decoration: none; }
+.crate-license a:hover { text-decoration: underline; }
+.crate-text { padding: 16px; background: #fff; font-size: 0.8rem; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<h1>Kanade - Third Party Licenses</h1>
+<p class="subtitle">This document lists the licenses of all third-party dependencies used by Kanade.</p>
+
+{{#each crates}}
+<div class="crate">
+  <div class="crate-header">
+    <span class="crate-name">{{this.name}}</span>
+    <span class="crate-version">{{this.version}}</span>
+    <div class="crate-license">{{#each this.licenses}}<a href="{{this.link}}">{{this.id}}</a>{{#unless @last}} / {{/unless}}{{/each}}</div>
+  </div>
+  <div class="crate-text">{{{this.license_text}}}</div>
+</div>
+{{/each}}
+
+</body>
+</html>
