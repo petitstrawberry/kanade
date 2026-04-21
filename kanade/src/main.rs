@@ -20,6 +20,7 @@ use tracing::{info, warn};
 
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
 use kanade_adapter_ws::{build_router, AppState, HlsCache, MediaKeyStore, WsBroadcaster};
+use kanade_adapter_ws::server::MEDIA_URL_TTL_SECS;
 
 mod persist;
 use persist::DatabaseStatePersister;
@@ -181,6 +182,15 @@ async fn main() -> Result<()> {
         media_key_store,
         hls_cache,
         local_session_owners: Arc::new(RwLock::new(HashMap::new())),
+    });
+    let media_key_store_for_cleanup = Arc::clone(&app_state.media_key_store);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(600));
+        let max_age = Duration::from_secs(MEDIA_URL_TTL_SECS + 300);
+        loop {
+            interval.tick().await;
+            media_key_store_for_cleanup.cleanup_expired(max_age);
+        }
     });
     let app = build_router(app_state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

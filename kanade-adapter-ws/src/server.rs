@@ -51,7 +51,7 @@ const RECONNECT_GRACE_MS: u64 = 5000;
 const READ_CHUNK_SIZE: usize = 64 * 1024;
 
 pub struct MediaKeyStore {
-    keys: RwLock<HashMap<String, [u8; 32]>>,
+    keys: RwLock<HashMap<String, ([u8; 32], Instant)>>,
 }
 
 impl MediaKeyStore {
@@ -65,16 +65,31 @@ impl MediaKeyStore {
         let mut key = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
         let key_id = uuid::Uuid::new_v4().to_string();
-        self.keys.write().unwrap().insert(key_id.clone(), key);
+        self.keys
+            .write()
+            .unwrap()
+            .insert(key_id.clone(), (key, Instant::now()));
         (key_id, key)
     }
 
     pub fn get(&self, key_id: &str) -> Option<[u8; 32]> {
-        self.keys.read().unwrap().get(key_id).copied()
+        self.keys
+            .read()
+            .unwrap()
+            .get(key_id)
+            .map(|(key, _created_at)| *key)
     }
 
     pub fn revoke(&self, key_id: &str) {
         self.keys.write().unwrap().remove(key_id);
+    }
+
+    pub fn cleanup_expired(&self, max_age: Duration) {
+        let now = Instant::now();
+        self.keys
+            .write()
+            .unwrap()
+            .retain(|_, (_, created_at)| now.duration_since(*created_at) <= max_age);
     }
 }
 
@@ -105,7 +120,7 @@ type WsStream = SplitStream<WebSocket>;
 
 type HmacSha256 = Hmac<Sha256>;
 
-const MEDIA_URL_TTL_SECS: u64 = 900;
+pub const MEDIA_URL_TTL_SECS: u64 = 86_400;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -628,8 +643,6 @@ async fn run_ui_mode(
             warn!(error = %e, node_id = %nid, "local_session_disconnect error");
         }
     }
-    state.media_key_store.revoke(&key_id);
-    info!(peer = %peer, key_id = %key_id, "revoked media key");
 }
 
 async fn handle_ui_client_message(
@@ -867,8 +880,6 @@ async fn run_node_mode(
         state.core.unregister_output(&node_id, &connection_id).await;
         state.core.handle_node_disconnected(&node_id).await;
     }
-    state.media_key_store.revoke(&key_id);
-    info!(peer = %peer, node_id = %node_id, key_id = %key_id, "revoked media key");
 }
 
 async fn dispatch_command(
