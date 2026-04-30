@@ -67,6 +67,7 @@ impl Database {
                 id: aid.clone(),
                 dir_path: dir_str,
                 title: track.album_title.clone(),
+                artist: None,
                 artwork_path: None,
             };
             let _ = self.upsert_album(&album);
@@ -388,37 +389,27 @@ impl Database {
 
     /// Fetch an album by its directory-hash ID.
     pub fn get_album_by_id(&self, album_id: &str) -> anyhow::Result<Option<Album>> {
+        let sql = format!(
+            "SELECT a.id, a.dir_path, a.title, a.artwork_path, artist_sub.artist \
+             FROM albums a {} WHERE a.id = ?1",
+            ALBUM_ARTIST_JOIN
+        );
         let result = self
             .conn
-            .query_row(
-                "SELECT id, dir_path, title, artwork_path FROM albums WHERE id = ?1",
-                params![album_id],
-                |row| {
-                    Ok(Album {
-                        id: row.get(0)?,
-                        dir_path: row.get(1)?,
-                        title: row.get(2)?,
-                        artwork_path: row.get(3)?,
-                    })
-                },
-            )
+            .query_row(&sql, params![album_id], row_to_album)
             .optional()?;
         Ok(result)
     }
 
     /// Fetch all albums, ordered by directory path.
     pub fn get_all_albums(&self) -> anyhow::Result<Vec<Album>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, dir_path, title, artwork_path FROM albums ORDER BY dir_path")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Album {
-                id: row.get(0)?,
-                dir_path: row.get(1)?,
-                title: row.get(2)?,
-                artwork_path: row.get(3)?,
-            })
-        })?;
+        let sql = format!(
+            "SELECT a.id, a.dir_path, a.title, a.artwork_path, artist_sub.artist \
+             FROM albums a {} ORDER BY a.dir_path",
+            ALBUM_ARTIST_JOIN
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_album)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -519,21 +510,17 @@ impl Database {
     }
 
     pub fn get_albums_by_artist(&self, artist: &str) -> anyhow::Result<Vec<Album>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT a.id, a.dir_path, a.title, a.artwork_path
-               FROM albums a
-               JOIN tracks t ON t.album_id = a.id
-               WHERE t.artist = ?1 OR t.album_artist = ?1
-               ORDER BY a.title, a.dir_path"#,
-        )?;
-        let rows = stmt.query_map(params![artist], |row| {
-            Ok(Album {
-                id: row.get(0)?,
-                dir_path: row.get(1)?,
-                title: row.get(2)?,
-                artwork_path: row.get(3)?,
-            })
-        })?;
+        let sql = format!(
+            "SELECT DISTINCT a.id, a.dir_path, a.title, a.artwork_path, artist_sub.artist \
+             FROM albums a \
+             JOIN tracks t ON t.album_id = a.id \
+             {} \
+             WHERE t.artist = ?1 OR t.album_artist = ?1 \
+             ORDER BY a.title, a.dir_path",
+            ALBUM_ARTIST_JOIN
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![artist], row_to_album)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -563,21 +550,17 @@ impl Database {
     }
 
     pub fn get_albums_by_genre(&self, genre: &str) -> anyhow::Result<Vec<Album>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT DISTINCT a.id, a.dir_path, a.title, a.artwork_path
-               FROM albums a
-               JOIN tracks t ON t.album_id = a.id
-               WHERE t.genre = ?1
-               ORDER BY a.title, a.dir_path"#,
-        )?;
-        let rows = stmt.query_map(params![genre], |row| {
-            Ok(Album {
-                id: row.get(0)?,
-                dir_path: row.get(1)?,
-                title: row.get(2)?,
-                artwork_path: row.get(3)?,
-            })
-        })?;
+        let sql = format!(
+            "SELECT DISTINCT a.id, a.dir_path, a.title, a.artwork_path, artist_sub.artist \
+             FROM albums a \
+             JOIN tracks t ON t.album_id = a.id \
+             {} \
+             WHERE t.genre = ?1 \
+             ORDER BY a.title, a.dir_path",
+            ALBUM_ARTIST_JOIN
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![genre], row_to_album)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -597,6 +580,30 @@ impl Database {
         tx.commit()?;
         Ok(result)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — shared SQL fragment and row mappers for album queries
+// ---------------------------------------------------------------------------
+
+/// LEFT JOIN fragment that resolves the album artist from the associated
+/// tracks.  Prefers `album_artist`; falls back to `artist`.  The result is
+/// exposed as the column alias `artist_sub.artist`.
+const ALBUM_ARTIST_JOIN: &str = r#"LEFT JOIN (
+    SELECT album_id, COALESCE(album_artist, artist) AS artist
+    FROM tracks
+    WHERE album_artist IS NOT NULL OR artist IS NOT NULL
+    GROUP BY album_id
+) artist_sub ON artist_sub.album_id = a.id"#;
+
+fn row_to_album(row: &rusqlite::Row<'_>) -> rusqlite::Result<Album> {
+    Ok(Album {
+        id: row.get(0)?,
+        dir_path: row.get(1)?,
+        title: row.get(2)?,
+        artwork_path: row.get(3)?,
+        artist: row.get(4)?,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +713,7 @@ mod tests {
             id: id_of("/music/my_album"),
             dir_path: "/music/my_album".to_string(),
             title: Some("My Album".to_string()),
+            artist: None,
             artwork_path: None,
         };
         db.upsert_album(&album).unwrap();
@@ -796,6 +804,24 @@ mod tests {
 
         let albums = db.get_all_albums().unwrap();
         assert_eq!(albums.len(), 2);
+    }
+
+    #[test]
+    fn album_artist_derived_from_tracks() {
+        let db = Database::open_in_memory().unwrap();
+        let track = sample_track("/music/album/01.flac");
+        db.upsert_track(&track).unwrap();
+
+        let album_id = id_of("/music/album");
+
+        // artist should be derived from the track's album_artist field
+        let album = db.get_album_by_id(&album_id).unwrap().unwrap();
+        assert_eq!(album.artist, Some("Test Album Artist".to_string()));
+
+        // get_all_albums should also populate artist
+        let albums = db.get_all_albums().unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].artist, Some("Test Album Artist".to_string()));
     }
 
     #[test]

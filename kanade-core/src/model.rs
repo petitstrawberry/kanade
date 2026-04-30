@@ -25,6 +25,8 @@ pub struct Album {
     pub dir_path: String,
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artwork_path: Option<String>,
 }
 

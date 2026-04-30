@@ -237,6 +237,7 @@ pub struct Album {
     pub id: String,       // SHA-256(dir_path)
     pub dir_path: String,
     pub title: Option<String>,
+    pub artist: Option<String>,
     pub artwork_path: Option<String>,
 }
 
