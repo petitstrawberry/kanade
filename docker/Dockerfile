@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     CARGO_INCREMENTAL=0 cargo build --release --locked -p kanade -p kanade-node && \
     cp target/release/kanade /tmp/kanade && \
     cp target/release/kanade-node /tmp/kanade-node && \
-    cargo install --locked cargo-about && \
+    cargo install --locked --features cli cargo-about && \
     cargo about generate about.hbs > /tmp/THIRD_PARTY_LICENSES.html
 
 FROM debian:trixie-20260406-slim
