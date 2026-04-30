@@ -20,6 +20,7 @@ export interface Album {
   id: string;
   dir_path: string;
   title: string | null;
+  artist: string | null;
   artwork_path: string | null;
 }
 
