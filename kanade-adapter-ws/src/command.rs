@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use kanade_core::model::{Album, RepeatMode, Track};
+use kanade_core::model::{Album, Playlist, PlaylistKind, RepeatMode, Track};
 use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +69,44 @@ pub enum WsCommand {
         from_node_id: String,
         to_node_id: String,
     },
+    // -------- Playlist commands --------
+    CreatePlaylist {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        #[serde(flatten)]
+        kind: PlaylistKind,
+    },
+    UpdatePlaylist {
+        playlist_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        /// `Some(None)` clears the description, `None` leaves it untouched.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<Option<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<PlaylistKind>,
+    },
+    DeletePlaylist {
+        playlist_id: String,
+    },
+    SetPlaylistTracks {
+        playlist_id: String,
+        track_ids: Vec<String>,
+    },
+    AppendPlaylistTracks {
+        playlist_id: String,
+        track_ids: Vec<String>,
+    },
+    RemovePlaylistTrack {
+        playlist_id: String,
+        position: usize,
+    },
+    MovePlaylistTrack {
+        playlist_id: String,
+        from: usize,
+        to: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +123,9 @@ pub enum WsRequest {
     Search { query: String },
     GetQueue,
     SignUrls { paths: Vec<String> },
+    GetPlaylists,
+    GetPlaylist { playlist_id: String },
+    GetPlaylistTracks { playlist_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +184,16 @@ pub enum WsResponse {
     SignedUrls {
         urls: HashMap<String, String>,
     },
+    Playlists {
+        playlists: Vec<Playlist>,
+    },
+    PlaylistDetails {
+        playlist: Option<Playlist>,
+    },
+    PlaylistTracks {
+        playlist_id: String,
+        tracks: Vec<Track>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,3 +210,69 @@ pub enum ClientMessage {
 }
 
 pub type WsNodeCommand = NodeCommand;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kanade_core::model::{
+        MatchMode, SmartCondition, SmartField, SmartFilter, SmartOperator,
+    };
+
+    #[test]
+    fn create_normal_playlist_command_roundtrip() {
+        let json = r#"{"cmd":"create_playlist","name":"Favs","kind":"normal"}"#;
+        let cmd: WsCommand = serde_json::from_str(json).unwrap();
+        match &cmd {
+            WsCommand::CreatePlaylist { name, kind, .. } => {
+                assert_eq!(name, "Favs");
+                assert!(matches!(kind, PlaylistKind::Normal));
+            }
+            _ => panic!("wrong variant"),
+        }
+        let serialized = serde_json::to_string(&cmd).unwrap();
+        assert!(serialized.contains("\"cmd\":\"create_playlist\""));
+        assert!(serialized.contains("\"kind\":\"normal\""));
+    }
+
+    #[test]
+    fn create_smart_playlist_command_roundtrip() {
+        let cmd = WsCommand::CreatePlaylist {
+            name: "Rock".to_string(),
+            description: None,
+            kind: PlaylistKind::Smart {
+                filter: SmartFilter {
+                    match_mode: MatchMode::All,
+                    conditions: vec![SmartCondition {
+                        field: SmartField::Genre,
+                        op: SmartOperator::Equals,
+                        value: "Rock".to_string(),
+                    }],
+                },
+                limit: Some(50),
+                sort_by: None,
+            },
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: WsCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            WsCommand::CreatePlaylist {
+                kind: PlaylistKind::Smart { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn playlist_request_roundtrip() {
+        let json = r#"{"req_id":7,"req":"get_playlists"}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ClientMessage::Request { req_id, req } => {
+                assert_eq!(req_id, 7);
+                assert!(matches!(req, WsRequest::GetPlaylists));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+}

@@ -3,7 +3,10 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 use tracing::instrument;
 
-use kanade_core::model::{Album, Artist, Track};
+use kanade_core::model::{
+    Album, Artist, MatchMode, Playlist, PlaylistKind, SmartField, SmartFilter, SmartOperator,
+    SmartSort, Track,
+};
 
 use crate::{hash::id_of, schema};
 
@@ -582,6 +585,397 @@ impl Database {
     }
 
     // ------------------------------------------------------------------
+    // Playlist operations
+    // ------------------------------------------------------------------
+
+    /// Create a playlist row and (for normal playlists) initialise its track
+    /// list. Returns the persisted `Playlist` (with normalised timestamps).
+    pub fn create_playlist(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        kind: &PlaylistKind,
+    ) -> anyhow::Result<Playlist> {
+        let id = generate_playlist_id(name);
+        self.create_playlist_with_id(&id, name, description, kind)
+    }
+
+    /// Create a playlist with a caller-supplied id (mostly useful for tests
+    /// and re-imports). Fails if the id already exists.
+    pub fn create_playlist_with_id(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        kind: &PlaylistKind,
+    ) -> anyhow::Result<Playlist> {
+        let kind_str = match kind {
+            PlaylistKind::Normal => "normal",
+            PlaylistKind::Smart { .. } => "smart",
+        };
+        let smart_filter_json = match kind {
+            PlaylistKind::Normal => None,
+            PlaylistKind::Smart { .. } => Some(serde_json::to_string(kind)?),
+        };
+
+        self.conn.execute(
+            r#"INSERT INTO playlists (id, name, description, kind, smart_filter, created_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, unixepoch(), unixepoch())"#,
+            params![id, name, description, kind_str, smart_filter_json],
+        )?;
+
+        self.get_playlist(id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {id} not found after insert"))
+    }
+
+    /// Fetch a single playlist by id.
+    pub fn get_playlist(&self, id: &str) -> anyhow::Result<Option<Playlist>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, description, kind, smart_filter, created_at, updated_at
+                 FROM playlists WHERE id = ?1",
+                params![id],
+                row_to_playlist,
+            )
+            .optional()?
+            .transpose()
+    }
+
+    /// List all playlists ordered by name.
+    pub fn get_all_playlists(&self) -> anyhow::Result<Vec<Playlist>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, description, kind, smart_filter, created_at, updated_at
+             FROM playlists ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], row_to_playlist)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r??);
+        }
+        Ok(out)
+    }
+
+    /// Update the metadata (and, for smart playlists, the filter) of a
+    /// playlist. The playlist `kind` may not change between normal and smart.
+    pub fn update_playlist(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<Option<&str>>,
+        kind: Option<&PlaylistKind>,
+    ) -> anyhow::Result<()> {
+        let existing = self
+            .get_playlist(id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {id} not found"))?;
+
+        if let Some(new_kind) = kind {
+            let same_variant = matches!(
+                (&existing.kind, new_kind),
+                (PlaylistKind::Normal, PlaylistKind::Normal)
+                    | (PlaylistKind::Smart { .. }, PlaylistKind::Smart { .. })
+            );
+            if !same_variant {
+                anyhow::bail!("cannot change playlist kind between normal and smart");
+            }
+        }
+
+        let new_name = name.unwrap_or(&existing.name);
+        let new_description: Option<String> = match description {
+            Some(d) => d.map(str::to_string),
+            None => existing.description.clone(),
+        };
+        let new_smart_filter_json = match kind.unwrap_or(&existing.kind) {
+            PlaylistKind::Normal => None,
+            k @ PlaylistKind::Smart { .. } => Some(serde_json::to_string(k)?),
+        };
+
+        self.conn.execute(
+            r#"UPDATE playlists SET
+                   name         = ?2,
+                   description  = ?3,
+                   smart_filter = ?4,
+                   updated_at   = unixepoch()
+               WHERE id = ?1"#,
+            params![id, new_name, new_description, new_smart_filter_json],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a playlist (cascades to `playlist_tracks`).
+    pub fn delete_playlist(&self, id: &str) -> anyhow::Result<()> {
+        self.conn
+            .execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Touch the `updated_at` timestamp of a playlist.
+    fn touch_playlist(&self, id: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "UPDATE playlists SET updated_at = unixepoch() WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Replace the entire ordered track list of a normal playlist.
+    /// `track_ids` is taken in order; positions are 0-based and contiguous.
+    pub fn set_playlist_tracks(
+        &self,
+        playlist_id: &str,
+        track_ids: &[String],
+    ) -> anyhow::Result<()> {
+        let pl = self
+            .get_playlist(playlist_id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
+        if !matches!(pl.kind, PlaylistKind::Normal) {
+            anyhow::bail!("cannot edit tracks of a smart playlist");
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+            params![playlist_id],
+        )?;
+        {
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO playlist_tracks (playlist_id, position, track_id)
+                 VALUES (?1, ?2, ?3)",
+            )?;
+            for (idx, tid) in track_ids.iter().enumerate() {
+                stmt.execute(params![playlist_id, idx as i64, tid])?;
+            }
+        }
+        self.touch_playlist(playlist_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Append tracks to the end of a normal playlist.
+    pub fn append_playlist_tracks(
+        &self,
+        playlist_id: &str,
+        track_ids: &[String],
+    ) -> anyhow::Result<()> {
+        if track_ids.is_empty() {
+            return Ok(());
+        }
+        let pl = self
+            .get_playlist(playlist_id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
+        if !matches!(pl.kind, PlaylistKind::Normal) {
+            anyhow::bail!("cannot edit tracks of a smart playlist");
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let next_pos: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_tracks WHERE playlist_id = ?1",
+                params![playlist_id],
+                |row| row.get(0),
+            )?;
+        {
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO playlist_tracks (playlist_id, position, track_id)
+                 VALUES (?1, ?2, ?3)",
+            )?;
+            for (offset, tid) in track_ids.iter().enumerate() {
+                stmt.execute(params![playlist_id, next_pos + offset as i64, tid])?;
+            }
+        }
+        self.touch_playlist(playlist_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove the entry at `position` from a normal playlist and renumber the
+    /// remaining entries.
+    pub fn remove_playlist_track(
+        &self,
+        playlist_id: &str,
+        position: usize,
+    ) -> anyhow::Result<()> {
+        let pl = self
+            .get_playlist(playlist_id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
+        if !matches!(pl.kind, PlaylistKind::Normal) {
+            anyhow::bail!("cannot edit tracks of a smart playlist");
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND position = ?2",
+            params![playlist_id, position as i64],
+        )?;
+        if removed > 0 {
+            self.conn.execute(
+                "UPDATE playlist_tracks SET position = position - 1
+                 WHERE playlist_id = ?1 AND position > ?2",
+                params![playlist_id, position as i64],
+            )?;
+            self.touch_playlist(playlist_id)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Move the entry at `from` to `to` within a normal playlist, shifting
+    /// the entries in between.
+    pub fn move_playlist_track(
+        &self,
+        playlist_id: &str,
+        from: usize,
+        to: usize,
+    ) -> anyhow::Result<()> {
+        if from == to {
+            return Ok(());
+        }
+        let pl = self
+            .get_playlist(playlist_id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
+        if !matches!(pl.kind, PlaylistKind::Normal) {
+            anyhow::bail!("cannot edit tracks of a smart playlist");
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        // Read the current list, reorder in memory, and rewrite.
+        let mut ids: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT track_id FROM playlist_tracks
+                 WHERE playlist_id = ?1 ORDER BY position",
+            )?;
+            let rows = stmt.query_map(params![playlist_id], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        if from >= ids.len() {
+            anyhow::bail!("from index {from} out of range");
+        }
+        let to = to.min(ids.len() - 1);
+        let item = ids.remove(from);
+        ids.insert(to, item);
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+            params![playlist_id],
+        )?;
+        {
+            let mut stmt = self.conn.prepare(
+                "INSERT INTO playlist_tracks (playlist_id, position, track_id)
+                 VALUES (?1, ?2, ?3)",
+            )?;
+            for (idx, tid) in ids.iter().enumerate() {
+                stmt.execute(params![playlist_id, idx as i64, tid])?;
+            }
+        }
+        self.touch_playlist(playlist_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Resolve a playlist's contents to full `Track` records, in playlist
+    /// order. Works for both normal and smart playlists.
+    pub fn get_playlist_tracks(&self, playlist_id: &str) -> anyhow::Result<Vec<Track>> {
+        let pl = self
+            .get_playlist(playlist_id)?
+            .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
+        match pl.kind {
+            PlaylistKind::Normal => self.get_normal_playlist_tracks(playlist_id),
+            PlaylistKind::Smart { filter, limit, sort_by } => {
+                self.evaluate_smart_filter(&filter, sort_by, limit)
+            }
+        }
+    }
+
+    fn get_normal_playlist_tracks(&self, playlist_id: &str) -> anyhow::Result<Vec<Track>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT t.file_path, t.id, t.title, t.track_number, t.disc_number, t.duration_secs,
+                      t.format, t.sample_rate, t.artist, t.album_artist, t.album_title,
+                      t.composer, t.genre, t.album_id
+               FROM playlist_tracks pt
+               JOIN tracks t ON t.id = pt.track_id
+               WHERE pt.playlist_id = ?1
+               ORDER BY pt.position"#,
+        )?;
+        let rows = stmt.query_map(params![playlist_id], row_to_track)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Evaluate a smart filter against the `tracks` table and return the
+    /// matching tracks. Exposed for tests and reuse.
+    pub fn evaluate_smart_filter(
+        &self,
+        filter: &SmartFilter,
+        sort_by: Option<SmartSort>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<Vec<Track>> {
+        // An empty filter intentionally matches nothing — guards against an
+        // unconfigured smart playlist accidentally returning the whole library.
+        if filter.conditions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut where_parts: Vec<String> = Vec::with_capacity(filter.conditions.len());
+        let mut values: Vec<String> = Vec::with_capacity(filter.conditions.len());
+        for cond in &filter.conditions {
+            let column = smart_field_column(cond.field);
+            let (sql_op, bind_value) = match cond.op {
+                SmartOperator::Equals => ("=", cond.value.clone()),
+                SmartOperator::NotEquals => ("!=", cond.value.clone()),
+                SmartOperator::Contains => ("LIKE", format!("%{}%", escape_like(&cond.value))),
+                SmartOperator::NotContains => {
+                    ("NOT LIKE", format!("%{}%", escape_like(&cond.value)))
+                }
+                SmartOperator::StartsWith => ("LIKE", format!("{}%", escape_like(&cond.value))),
+                SmartOperator::EndsWith => ("LIKE", format!("%{}", escape_like(&cond.value))),
+            };
+            let escape_clause = matches!(
+                cond.op,
+                SmartOperator::Contains
+                    | SmartOperator::NotContains
+                    | SmartOperator::StartsWith
+                    | SmartOperator::EndsWith
+            )
+            .then_some(" ESCAPE '\\'")
+            .unwrap_or("");
+            where_parts.push(format!(
+                "({col} IS NOT NULL AND {col} {op} ?{escape})",
+                col = column,
+                op = sql_op,
+                escape = escape_clause,
+            ));
+            values.push(bind_value);
+        }
+
+        let joiner = match filter.match_mode {
+            MatchMode::All => " AND ",
+            MatchMode::Any => " OR ",
+        };
+        let where_clause = where_parts.join(joiner);
+        let order_clause = match sort_by {
+            Some(SmartSort::Title) => "ORDER BY title COLLATE NOCASE",
+            Some(SmartSort::Artist) => "ORDER BY artist COLLATE NOCASE, album_title, disc_number, track_number",
+            Some(SmartSort::Album) => "ORDER BY album_title COLLATE NOCASE, disc_number, track_number",
+            Some(SmartSort::Genre) => "ORDER BY genre COLLATE NOCASE, artist, album_title, disc_number, track_number",
+            None => "ORDER BY artist, album_title, disc_number, track_number, title",
+        };
+        let limit_clause = match limit {
+            Some(n) => format!(" LIMIT {n}"),
+            None => String::new(),
+        };
+
+        let sql = format!(
+            r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
+                      format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+               FROM tracks
+               WHERE {where_clause}
+               {order_clause}{limit_clause}"#,
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = values
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt.query_map(params.as_slice(), row_to_track)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    // ------------------------------------------------------------------
     // Transaction helpers
     // ------------------------------------------------------------------
 
@@ -620,6 +1014,80 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
         composer: row.get(11)?,
         genre: row.get(12)?,
     })
+}
+
+/// Map a `playlists` row to a `Playlist` model.
+///
+/// Returns a nested `Result` because the JSON deserialisation of the
+/// `smart_filter` column is fallible at the application layer rather than at
+/// the rusqlite layer.
+fn row_to_playlist(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<anyhow::Result<Playlist>> {
+    let id: String = row.get(0)?;
+    let name: String = row.get(1)?;
+    let description: Option<String> = row.get(2)?;
+    let kind_str: String = row.get(3)?;
+    let smart_filter_json: Option<String> = row.get(4)?;
+    let created_at: i64 = row.get(5)?;
+    let updated_at: i64 = row.get(6)?;
+    Ok((|| -> anyhow::Result<Playlist> {
+        let kind = match kind_str.as_str() {
+            "normal" => PlaylistKind::Normal,
+            "smart" => {
+                let json = smart_filter_json
+                    .ok_or_else(|| anyhow::anyhow!("smart playlist {id} missing filter"))?;
+                serde_json::from_str::<PlaylistKind>(&json)?
+            }
+            other => anyhow::bail!("unknown playlist kind: {other}"),
+        };
+        Ok(Playlist {
+            id,
+            name,
+            description,
+            kind,
+            created_at,
+            updated_at,
+        })
+    })())
+}
+
+fn smart_field_column(field: SmartField) -> &'static str {
+    match field {
+        SmartField::Title => "title",
+        SmartField::Artist => "artist",
+        SmartField::AlbumArtist => "album_artist",
+        SmartField::Album => "album_title",
+        SmartField::Composer => "composer",
+        SmartField::Genre => "genre",
+    }
+}
+
+/// Escape SQL `LIKE` metacharacters so they match literally. The query uses
+/// `ESCAPE '\\'` so we escape `\\`, `%` and `_`.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Generate a deterministic-ish playlist id. Includes a random suffix so
+/// re-using the same name yields a fresh row.
+fn generate_playlist_id(name: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    crate::hash::id_of(&format!("playlist:{name}:{now_ns}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -945,5 +1413,272 @@ mod tests {
         assert_eq!(state.active_output_id.as_deref(), Some("node-a"));
         assert!(state.shuffle);
         assert_eq!(state.repeat, "all");
+    }
+
+    // --- Playlist tests --------------------------------------------------
+
+    fn track_with(file_path: &str, title: &str, artist: &str, album: &str, genre: &str) -> Track {
+        Track {
+            id: id_of(file_path),
+            file_path: file_path.to_string(),
+            album_id: None,
+            title: Some(title.to_string()),
+            artist: Some(artist.to_string()),
+            album_artist: Some(artist.to_string()),
+            album_title: Some(album.to_string()),
+            composer: Some("Composer".to_string()),
+            genre: Some(genre.to_string()),
+            track_number: Some(1),
+            disc_number: None,
+            duration_secs: Some(180.0),
+            format: Some("FLAC".to_string()),
+            sample_rate: Some(44100),
+        }
+    }
+
+    #[test]
+    fn create_and_get_normal_playlist() {
+        let db = Database::open_in_memory().unwrap();
+        let pl = db
+            .create_playlist("Favourites", Some("My favs"), &PlaylistKind::Normal)
+            .unwrap();
+        assert_eq!(pl.name, "Favourites");
+        assert_eq!(pl.description.as_deref(), Some("My favs"));
+        assert!(matches!(pl.kind, PlaylistKind::Normal));
+
+        let fetched = db.get_playlist(&pl.id).unwrap().unwrap();
+        assert_eq!(fetched, pl);
+
+        let all = db.get_all_playlists().unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn normal_playlist_track_operations() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = track_with("/m/a/01.flac", "T1", "A", "Alb", "Rock");
+        let t2 = track_with("/m/a/02.flac", "T2", "A", "Alb", "Rock");
+        let t3 = track_with("/m/a/03.flac", "T3", "A", "Alb", "Rock");
+        for t in [&t1, &t2, &t3] {
+            db.upsert_track(t).unwrap();
+        }
+        let pl = db
+            .create_playlist("Mix", None, &PlaylistKind::Normal)
+            .unwrap();
+
+        // append
+        db.append_playlist_tracks(&pl.id, &[t1.id.clone(), t2.id.clone()])
+            .unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].id, t1.id);
+        assert_eq!(tracks[1].id, t2.id);
+
+        // append more
+        db.append_playlist_tracks(&pl.id, &[t3.id.clone()]).unwrap();
+        assert_eq!(db.get_playlist_tracks(&pl.id).unwrap().len(), 3);
+
+        // move t3 (idx 2) to position 0
+        db.move_playlist_track(&pl.id, 2, 0).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert_eq!(tracks[0].id, t3.id);
+        assert_eq!(tracks[1].id, t1.id);
+        assert_eq!(tracks[2].id, t2.id);
+
+        // remove position 1 (t1)
+        db.remove_playlist_track(&pl.id, 1).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].id, t3.id);
+        assert_eq!(tracks[1].id, t2.id);
+
+        // set replaces
+        db.set_playlist_tracks(&pl.id, &[t1.id.clone()]).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, t1.id);
+    }
+
+    #[test]
+    fn smart_playlist_evaluation_match_all() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = track_with("/m/a/01.flac", "Hello", "Alice", "First", "Rock");
+        let t2 = track_with("/m/a/02.flac", "World", "Alice", "First", "Jazz");
+        let t3 = track_with("/m/b/01.flac", "Goodbye", "Bob", "Second", "Rock");
+        for t in [&t1, &t2, &t3] {
+            db.upsert_track(t).unwrap();
+        }
+        let kind = PlaylistKind::Smart {
+            filter: SmartFilter {
+                match_mode: MatchMode::All,
+                conditions: vec![
+                    kanade_core::model::SmartCondition {
+                        field: SmartField::Artist,
+                        op: SmartOperator::Equals,
+                        value: "Alice".to_string(),
+                    },
+                    kanade_core::model::SmartCondition {
+                        field: SmartField::Genre,
+                        op: SmartOperator::Equals,
+                        value: "Rock".to_string(),
+                    },
+                ],
+            },
+            limit: None,
+            sort_by: None,
+        };
+        let pl = db.create_playlist("Alice Rock", None, &kind).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, t1.id);
+    }
+
+    #[test]
+    fn smart_playlist_evaluation_match_any_contains() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = track_with("/m/a/01.flac", "Hello World", "Alice", "First", "Rock");
+        let t2 = track_with("/m/a/02.flac", "Goodbye", "Bob", "Second", "Jazz");
+        let t3 = track_with("/m/c/01.flac", "Untitled", "Carol", "Third", "Rock");
+        for t in [&t1, &t2, &t3] {
+            db.upsert_track(t).unwrap();
+        }
+        let kind = PlaylistKind::Smart {
+            filter: SmartFilter {
+                match_mode: MatchMode::Any,
+                conditions: vec![
+                    kanade_core::model::SmartCondition {
+                        field: SmartField::Title,
+                        op: SmartOperator::Contains,
+                        value: "World".to_string(),
+                    },
+                    kanade_core::model::SmartCondition {
+                        field: SmartField::Artist,
+                        op: SmartOperator::Equals,
+                        value: "Carol".to_string(),
+                    },
+                ],
+            },
+            limit: None,
+            sort_by: Some(SmartSort::Title),
+        };
+        let pl = db.create_playlist("Mix", None, &kind).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        let ids: Vec<&str> = tracks.iter().map(|t| t.id.as_str()).collect();
+        assert!(ids.contains(&t1.id.as_str()));
+        assert!(ids.contains(&t3.id.as_str()));
+        assert_eq!(tracks.len(), 2);
+    }
+
+    #[test]
+    fn smart_playlist_empty_filter_matches_nothing() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = track_with("/m/a/01.flac", "T", "A", "Alb", "Rock");
+        db.upsert_track(&t1).unwrap();
+        let kind = PlaylistKind::Smart {
+            filter: SmartFilter {
+                match_mode: MatchMode::All,
+                conditions: vec![],
+            },
+            limit: None,
+            sort_by: None,
+        };
+        let pl = db.create_playlist("Empty", None, &kind).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert!(tracks.is_empty());
+    }
+
+    #[test]
+    fn smart_playlist_like_escapes_metacharacters() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = track_with("/m/a/01.flac", "100% Pure", "A", "Alb", "Rock");
+        let t2 = track_with("/m/a/02.flac", "100 Pure", "A", "Alb", "Rock");
+        db.upsert_track(&t1).unwrap();
+        db.upsert_track(&t2).unwrap();
+        let kind = PlaylistKind::Smart {
+            filter: SmartFilter {
+                match_mode: MatchMode::All,
+                conditions: vec![kanade_core::model::SmartCondition {
+                    field: SmartField::Title,
+                    op: SmartOperator::Contains,
+                    value: "100%".to_string(),
+                }],
+            },
+            limit: None,
+            sort_by: None,
+        };
+        let pl = db.create_playlist("Pct", None, &kind).unwrap();
+        let tracks = db.get_playlist_tracks(&pl.id).unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].id, t1.id);
+    }
+
+    #[test]
+    fn cannot_edit_smart_playlist_tracks() {
+        let db = Database::open_in_memory().unwrap();
+        let kind = PlaylistKind::Smart {
+            filter: SmartFilter {
+                match_mode: MatchMode::All,
+                conditions: vec![kanade_core::model::SmartCondition {
+                    field: SmartField::Genre,
+                    op: SmartOperator::Equals,
+                    value: "Rock".to_string(),
+                }],
+            },
+            limit: None,
+            sort_by: None,
+        };
+        let pl = db.create_playlist("Smart", None, &kind).unwrap();
+        let err = db.append_playlist_tracks(&pl.id, &["x".to_string()]);
+        assert!(err.is_err());
+        let err = db.set_playlist_tracks(&pl.id, &["x".to_string()]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn update_and_delete_playlist() {
+        let db = Database::open_in_memory().unwrap();
+        let pl = db
+            .create_playlist("Old", Some("desc"), &PlaylistKind::Normal)
+            .unwrap();
+        db.update_playlist(&pl.id, Some("New"), Some(None), None)
+            .unwrap();
+        let updated = db.get_playlist(&pl.id).unwrap().unwrap();
+        assert_eq!(updated.name, "New");
+        assert_eq!(updated.description, None);
+
+        // changing kind variant must fail
+        let smart = PlaylistKind::Smart {
+            filter: SmartFilter {
+                match_mode: MatchMode::All,
+                conditions: vec![],
+            },
+            limit: None,
+            sort_by: None,
+        };
+        assert!(db.update_playlist(&pl.id, None, None, Some(&smart)).is_err());
+
+        db.delete_playlist(&pl.id).unwrap();
+        assert!(db.get_playlist(&pl.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_playlist_cascades_tracks() {
+        let db = Database::open_in_memory().unwrap();
+        let t1 = track_with("/m/a/01.flac", "T", "A", "Alb", "Rock");
+        db.upsert_track(&t1).unwrap();
+        let pl = db
+            .create_playlist("X", None, &PlaylistKind::Normal)
+            .unwrap();
+        db.append_playlist_tracks(&pl.id, &[t1.id.clone()]).unwrap();
+        db.delete_playlist(&pl.id).unwrap();
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?1",
+                params![pl.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

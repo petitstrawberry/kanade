@@ -173,6 +173,13 @@ Tagged with `"cmd"`. No response is sent.
 | `remove_from_queue`  | `index: usize`                        | Remove track at index |
 | `move_in_queue`      | `from: usize`, `to: usize`           | Reorder track       |
 | `clear_queue`        | —                                    | Clear entire queue    |
+| `create_playlist`    | `name`, `description?`, `kind` (+ smart fields) | Create normal/smart playlist |
+| `update_playlist`    | `playlist_id`, `name?`, `description??`, `kind?` | Update playlist metadata |
+| `delete_playlist`    | `playlist_id`                        | Delete a playlist     |
+| `set_playlist_tracks`| `playlist_id`, `track_ids: [string]` | Replace tracks of a normal playlist |
+| `append_playlist_tracks` | `playlist_id`, `track_ids: [string]` | Append tracks to a normal playlist |
+| `remove_playlist_track`  | `playlist_id`, `position: usize`   | Remove track at position |
+| `move_playlist_track`    | `playlist_id`, `from: usize`, `to: usize` | Reorder a track |
 
 #### Requests (require response)
 
@@ -198,6 +205,9 @@ Tagged with `"req"` and `"req_id"`. The server replies with a matching `req_id`.
 | `search`            | `query`                | `search_results`  |
 | `get_queue`         | —                      | `queue`           |
 | `sign_urls`         | `paths: [string]`      | `signed_urls`     |
+| `get_playlists`       | —                                  | `playlists`       |
+| `get_playlist`        | `playlist_id`                      | `playlist_details`|
+| `get_playlist_tracks` | `playlist_id`                      | `playlist_tracks` |
 
 ### 2.3 Server → Client Messages
 
@@ -244,7 +254,9 @@ Replies to request messages. The `data` field contains the response variant.
 | `search_results`   | `{ "tracks": [Track] }`                     |
 | `queue`            | `{ "tracks": [Track], "current_index": usize? }` |
 | `signed_urls`      | `{ "urls": { string: string } }` |
-
+| `playlists`        | `{ "playlists": [Playlist] }`               |
+| `playlist_details` | `{ "playlist": Playlist? }`                  |
+| `playlist_tracks`  | `{ "playlist_id": string, "tracks": [Track] }` |
 ---
 
 ## 3. Media Surface
@@ -549,3 +561,53 @@ Fields with `null` values are omitted from JSON (`skip_serializing_if = "Option:
 **PlaybackStatus**: `"stopped"` | `"playing"` | `"paused"` | `"loading"`
 
 **RepeatMode**: `"off"` | `"one"` | `"all"`
+
+### Playlist
+
+Two playlist kinds are supported:
+
+- **Normal playlist** (`kind: "normal"`): a user-curated, ordered list of tracks.
+- **Smart playlist** (`kind: "smart"`): a dynamic playlist whose contents are
+  computed by evaluating a filter over the library each time the playlist
+  is fetched.
+
+```json
+{
+  "id": "sha256hex",
+  "name": "Favourites",
+  "description": "Optional description",
+  "kind": "normal",
+  "created_at": 1714000000,
+  "updated_at": 1714000000
+}
+```
+
+```json
+{
+  "id": "sha256hex",
+  "name": "Lossless Rock",
+  "kind": "smart",
+  "filter": {
+    "match_mode": "all",
+    "conditions": [
+      { "field": "genre",  "op": "equals",   "value": "Rock" },
+      { "field": "artist", "op": "contains", "value": "Beatles" }
+    ]
+  },
+  "limit": 100,
+  "sort_by": "title",
+  "created_at": 1714000000,
+  "updated_at": 1714000000
+}
+```
+
+**SmartField**: `"title"` | `"artist"` | `"album_artist"` | `"album"` | `"composer"` | `"genre"`
+
+**SmartOperator**: `"equals"` | `"not_equals"` | `"contains"` | `"not_contains"` | `"starts_with"` | `"ends_with"`
+
+**MatchMode**: `"all"` (logical AND) | `"any"` (logical OR)
+
+**SmartSort** (optional): `"title"` | `"artist"` | `"album"` | `"genre"`
+
+A smart playlist with an empty `conditions` list intentionally matches no
+tracks (to guard against accidentally returning the entire library).

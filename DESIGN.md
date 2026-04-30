@@ -246,6 +246,50 @@ pub struct Artist {
 }
 ```
 
+### Playlist
+
+Kanade supports two playlist kinds:
+
+- `Normal` — a user-curated, ordered list of tracks. Tracks are stored in
+  the `playlist_tracks` table keyed by `(playlist_id, position)`.
+- `Smart` — a rule-based playlist whose contents are dynamically evaluated
+  against the `tracks` table on each fetch using a `SmartFilter`.
+
+```rust
+pub enum PlaylistKind {
+    Normal,
+    Smart {
+        filter: SmartFilter,
+        limit: Option<u32>,
+        sort_by: Option<SmartSort>,
+    },
+}
+
+pub struct SmartFilter {
+    pub match_mode: MatchMode,            // All (AND) | Any (OR)
+    pub conditions: Vec<SmartCondition>,
+}
+
+pub struct SmartCondition {
+    pub field: SmartField,                // Title | Artist | AlbumArtist | Album | Composer | Genre
+    pub op: SmartOperator,                // Equals | NotEquals | Contains | NotContains | StartsWith | EndsWith
+    pub value: String,
+}
+
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub kind: PlaylistKind,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+```
+
+A smart playlist with an empty `conditions` list intentionally matches no
+tracks; this guards against an unconfigured smart playlist returning the
+entire library.
+
 ## Data Flow
 
 ### Playback

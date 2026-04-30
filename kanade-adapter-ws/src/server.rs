@@ -655,6 +655,19 @@ async fn handle_ui_client_message(
 ) {
     match msg {
         ClientMessage::Command(cmd) => {
+            if matches!(
+                cmd,
+                WsCommand::CreatePlaylist { .. }
+                    | WsCommand::UpdatePlaylist { .. }
+                    | WsCommand::DeletePlaylist { .. }
+                    | WsCommand::SetPlaylistTracks { .. }
+                    | WsCommand::AppendPlaylistTracks { .. }
+                    | WsCommand::RemovePlaylistTrack { .. }
+                    | WsCommand::MovePlaylistTrack { .. }
+            ) {
+                dispatch_playlist_command(cmd, state).await;
+                return;
+            }
             dispatch_command(
                 cmd,
                 &state.core,
@@ -1069,10 +1082,97 @@ async fn dispatch_command(
             }
             Ok(())
         }
+        WsCommand::CreatePlaylist { .. }
+        | WsCommand::UpdatePlaylist { .. }
+        | WsCommand::DeletePlaylist { .. }
+        | WsCommand::SetPlaylistTracks { .. }
+        | WsCommand::AppendPlaylistTracks { .. }
+        | WsCommand::RemovePlaylistTrack { .. }
+        | WsCommand::MovePlaylistTrack { .. } => {
+            // Playlist commands are handled out-of-band via
+            // `dispatch_playlist_command` in `handle_ui_client_message`
+            // because they only require database access.
+            Ok(())
+        }
     };
 
     if let Err(e) = result {
         warn!(error = %e, "WS dispatch error");
+    }
+}
+
+/// Handle playlist commands that only require database access.
+///
+/// Playlist mutations follow the same fire-and-forget convention as the
+/// other `WsCommand` variants (queue ops, playback control, etc.): errors
+/// are logged server-side and clients observe the resulting state by
+/// issuing a follow-up `WsRequest::GetPlaylist` / `GetPlaylists` /
+/// `GetPlaylistTracks`.
+async fn dispatch_playlist_command(cmd: WsCommand, state: &Arc<AppState>) {
+    let path = state.db_path.clone();
+    let result: Result<(), String> = tokio::task::spawn_blocking(move || {
+        let db = kanade_db::Database::open(&path).map_err(|e| e.to_string())?;
+        match cmd {
+            WsCommand::CreatePlaylist {
+                name,
+                description,
+                kind,
+            } => {
+                db.create_playlist(&name, description.as_deref(), &kind)
+                    .map_err(|e| e.to_string())?;
+            }
+            WsCommand::UpdatePlaylist {
+                playlist_id,
+                name,
+                description,
+                kind,
+            } => {
+                let desc_arg = description.as_ref().map(|d| d.as_deref());
+                db.update_playlist(&playlist_id, name.as_deref(), desc_arg, kind.as_ref())
+                    .map_err(|e| e.to_string())?;
+            }
+            WsCommand::DeletePlaylist { playlist_id } => {
+                db.delete_playlist(&playlist_id)
+                    .map_err(|e| e.to_string())?;
+            }
+            WsCommand::SetPlaylistTracks {
+                playlist_id,
+                track_ids,
+            } => {
+                db.set_playlist_tracks(&playlist_id, &track_ids)
+                    .map_err(|e| e.to_string())?;
+            }
+            WsCommand::AppendPlaylistTracks {
+                playlist_id,
+                track_ids,
+            } => {
+                db.append_playlist_tracks(&playlist_id, &track_ids)
+                    .map_err(|e| e.to_string())?;
+            }
+            WsCommand::RemovePlaylistTrack {
+                playlist_id,
+                position,
+            } => {
+                db.remove_playlist_track(&playlist_id, position)
+                    .map_err(|e| e.to_string())?;
+            }
+            WsCommand::MovePlaylistTrack {
+                playlist_id,
+                from,
+                to,
+            } => {
+                db.move_playlist_track(&playlist_id, from, to)
+                    .map_err(|e| e.to_string())?;
+            }
+            _ => {}
+        }
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("join error: {e}")));
+
+    if let Err(e) = result {
+        warn!(error = %e, "WS playlist command error");
     }
 }
 
@@ -1215,6 +1315,42 @@ async fn handle_request(req: WsRequest, state: &AppState, media_auth_key_id: &st
                 })
                 .collect();
             WsResponse::SignedUrls { urls }
+        }
+        WsRequest::GetPlaylists => {
+            let path = db_path.clone();
+            let playlists = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_all_playlists().ok()
+            })
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
+            WsResponse::Playlists { playlists }
+        }
+        WsRequest::GetPlaylist { playlist_id } => {
+            let path = db_path.clone();
+            let playlist = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_playlist(&playlist_id).ok().flatten()
+            })
+            .await
+            .unwrap_or(None);
+            WsResponse::PlaylistDetails { playlist }
+        }
+        WsRequest::GetPlaylistTracks { playlist_id } => {
+            let path = db_path.clone();
+            let pid = playlist_id.clone();
+            let tracks = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_playlist_tracks(&pid).ok()
+            })
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
+            WsResponse::PlaylistTracks {
+                playlist_id,
+                tracks,
+            }
         }
     }
 }

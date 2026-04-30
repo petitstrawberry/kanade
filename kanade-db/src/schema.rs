@@ -12,7 +12,7 @@ use rusqlite::{Connection, Result};
 /// - FTS5 virtual table covers title / album / artist / composer for fast
 ///   incremental search.
 /// Schema version. Increment when adding columns or tables.
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 pub static SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -162,6 +162,37 @@ static MIGRATIONS: &[(&str, &str)] = &[
         r#"
             ALTER TABLE playback_state ADD COLUMN active_output_id TEXT;
             UPDATE playback_state SET active_output_id = NULL WHERE active_output_id IS NULL;
+        "#,
+    ),
+    (
+        "8",
+        r#"
+            -- v8: playlists (normal + smart)
+            -- `kind` is 'normal' or 'smart'.
+            -- For smart playlists, `smart_filter` holds a JSON-serialized
+            -- `PlaylistKind::Smart { filter, limit, sort_by }` payload.
+            CREATE TABLE IF NOT EXISTS playlists (
+                id            TEXT NOT NULL PRIMARY KEY,
+                name          TEXT NOT NULL,
+                description   TEXT,
+                kind          TEXT NOT NULL,
+                smart_filter  TEXT,
+                created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+                updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
+            );
+
+            -- Ordered tracks for normal playlists. `position` is 0-based.
+            CREATE TABLE IF NOT EXISTS playlist_tracks (
+                playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                position    INTEGER NOT NULL,
+                track_id    TEXT NOT NULL,
+                PRIMARY KEY (playlist_id, position)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track
+                ON playlist_tracks (track_id);
+            CREATE INDEX IF NOT EXISTS idx_playlists_name
+                ON playlists (name);
         "#,
     ),
 ];
