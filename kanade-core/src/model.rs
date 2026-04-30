@@ -105,3 +105,107 @@ impl Default for Node {
 fn default_connected() -> bool {
     true
 }
+
+// ---------------------------------------------------------------------------
+// Playlist model
+// ---------------------------------------------------------------------------
+
+/// The kind of a playlist.
+///
+/// - `Normal`: a static, user-curated ordered list of tracks.
+/// - `Smart`: a dynamic playlist whose contents are computed by evaluating a
+///   filter over the library on demand.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlaylistKind {
+    Normal,
+    Smart {
+        filter: SmartFilter,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sort_by: Option<SmartSort>,
+    },
+}
+
+/// Filter combining one or more conditions for a smart playlist.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmartFilter {
+    /// How to combine `conditions`.
+    #[serde(default)]
+    pub match_mode: MatchMode,
+    /// At least one condition is required for the filter to be considered
+    /// non-empty; an empty list matches nothing.
+    pub conditions: Vec<SmartCondition>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchMode {
+    /// All conditions must match (logical AND).
+    #[default]
+    All,
+    /// Any condition must match (logical OR).
+    Any,
+}
+
+/// Single rule applied against a track field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmartCondition {
+    pub field: SmartField,
+    pub op: SmartOperator,
+    pub value: String,
+}
+
+/// Track fields that can be filtered on by a smart playlist.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartField {
+    Title,
+    Artist,
+    AlbumArtist,
+    Album,
+    Composer,
+    Genre,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartOperator {
+    Equals,
+    NotEquals,
+    Contains,
+    NotContains,
+    StartsWith,
+    EndsWith,
+}
+
+/// Sort order applied after filtering, for smart playlists.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartSort {
+    Title,
+    Artist,
+    Album,
+    Genre,
+}
+
+/// Persistent playlist record (without its track contents).
+///
+/// For `Normal` playlists, ordered tracks are stored separately in the
+/// `playlist_tracks` table and fetched via `Database::get_playlist_tracks`.
+/// For `Smart` playlists, the track list is dynamically evaluated by
+/// `Database::evaluate_smart_playlist`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(flatten)]
+    pub kind: PlaylistKind,
+    /// Unix epoch seconds of creation.
+    pub created_at: i64,
+    /// Unix epoch seconds of last modification.
+    pub updated_at: i64,
+}

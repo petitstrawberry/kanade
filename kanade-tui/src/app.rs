@@ -501,6 +501,11 @@ impl App {
                 current_index: _,
             } => {}
             WsResponse::SignedUrls { .. } => {}
+            // Playlist responses are not yet wired into the TUI; ignore them
+            // so that the TUI keeps compiling against the new protocol.
+            WsResponse::Playlists { .. }
+            | WsResponse::PlaylistDetails { .. }
+            | WsResponse::PlaylistTracks { .. } => {}
         }
     }
 
