@@ -316,6 +316,7 @@ struct FlacStreamInfo {
     channels: u8,
     bits_per_sample: u8,
     max_block_size: u16,
+    total_samples: u64,
 }
 
 const MAX_FMP4_AUDIO_SAMPLE_RATE: u32 = u16::MAX as u32;
@@ -682,6 +683,22 @@ fn remux_flac(
             keyframe: true,
             composition_time_offset: None,
         });
+    }
+
+    if streaminfo.total_samples > 0 {
+        let computed_total: u64 = samples.iter().map(|s| s.duration as u64).sum();
+        if computed_total > streaminfo.total_samples {
+            let mut excess = computed_total - streaminfo.total_samples;
+            for sample in samples.iter_mut().rev() {
+                if excess == 0 {
+                    break;
+                }
+                let reducible = (sample.duration as u64).saturating_sub(1);
+                let reduction = reducible.min(excess);
+                sample.duration -= reduction as u32;
+                excess -= reduction;
+            }
+        }
     }
 
     Ok(RemuxedTrack {
@@ -1315,12 +1332,18 @@ fn parse_flac_streaminfo(block: &[u8]) -> Result<FlacStreamInfo, HlsError> {
         ((block[10] as u32) << 12) | ((block[11] as u32) << 4) | ((block[12] as u32 & 0xF0) >> 4);
     let channels = ((block[12] & 0x0E) >> 1) + 1;
     let bits_per_sample = (((block[12] & 0x01) << 4) | ((block[13] & 0xF0) >> 4)) + 1;
+    let total_samples = ((block[13] as u64 & 0x0F) << 32)
+        | ((block[14] as u64) << 24)
+        | ((block[15] as u64) << 16)
+        | ((block[16] as u64) << 8)
+        | (block[17] as u64);
 
     Ok(FlacStreamInfo {
         sample_rate,
         channels,
         bits_per_sample,
         max_block_size,
+        total_samples,
     })
 }
 
