@@ -1285,6 +1285,17 @@ async fn handle_request(req: WsRequest, state: &AppState, media_auth_key_id: &st
             .unwrap_or_default();
             WsResponse::SearchResults { tracks }
         }
+        WsRequest::GetTracks { offset, limit } => {
+            let path = db_path.clone();
+            let tracks = tokio::task::spawn_blocking(move || {
+                let db = Database::open(&path).ok()?;
+                db.get_tracks(offset, limit).ok()
+            })
+            .await
+            .unwrap_or(None)
+            .unwrap_or_default();
+            WsResponse::Tracks { tracks }
+        }
         WsRequest::GetQueue => {
             let state = core.state_handle();
             let s = state.read().await;

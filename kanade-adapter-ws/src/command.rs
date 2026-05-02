@@ -113,19 +113,43 @@ pub enum WsCommand {
 #[serde(tag = "req", rename_all = "snake_case")]
 pub enum WsRequest {
     GetAlbums,
-    GetAlbumTracks { album_id: String },
+    GetAlbumTracks {
+        album_id: String,
+    },
+    GetTracks {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        offset: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
     GetArtists,
-    GetArtistAlbums { artist: String },
-    GetArtistTracks { artist: String },
+    GetArtistAlbums {
+        artist: String,
+    },
+    GetArtistTracks {
+        artist: String,
+    },
     GetGenres,
-    GetGenreAlbums { genre: String },
-    GetGenreTracks { genre: String },
-    Search { query: String },
+    GetGenreAlbums {
+        genre: String,
+    },
+    GetGenreTracks {
+        genre: String,
+    },
+    Search {
+        query: String,
+    },
     GetQueue,
-    SignUrls { paths: Vec<String> },
+    SignUrls {
+        paths: Vec<String>,
+    },
     GetPlaylists,
-    GetPlaylist { playlist_id: String },
-    GetPlaylistTracks { playlist_id: String },
+    GetPlaylist {
+        playlist_id: String,
+    },
+    GetPlaylistTracks {
+        playlist_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +178,9 @@ pub enum WsResponse {
         albums: Vec<Album>,
     },
     AlbumTracks {
+        tracks: Vec<Track>,
+    },
+    Tracks {
         tracks: Vec<Track>,
     },
     Artists {

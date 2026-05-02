@@ -175,6 +175,32 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Fetch tracks with optional pagination.
+    /// Returns all tracks when both parameters are None.
+    pub fn get_tracks(
+        &self,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> anyhow::Result<Vec<Track>> {
+        let limit_clause = match limit {
+            Some(n) => format!(" LIMIT {n}"),
+            None => String::new(),
+        };
+        let offset_clause = match offset {
+            Some(n) => format!(" OFFSET {n}"),
+            None => String::new(),
+        };
+        let sql = format!(
+            r#"SELECT file_path, id, title, track_number, disc_number, duration_secs,
+                      format, sample_rate, artist, album_artist, album_title, composer, genre, album_id
+               FROM tracks
+               ORDER BY album_title, disc_number, track_number, title{limit_clause}{offset_clause}"#
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_track)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Fetch all audio file paths currently in the database.
     pub fn get_all_track_paths(&self) -> anyhow::Result<Vec<String>> {
         let mut stmt = self
