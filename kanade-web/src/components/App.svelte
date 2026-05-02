@@ -132,7 +132,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    border-right: 1px solid var(--bg-highlight);
+    border-right: 1px solid rgba(87, 82, 121, 0.08);
   }
 
   .logo {
@@ -210,7 +210,7 @@
   .transport {
     grid-column: 1 / -1;
     background-color: var(--bg-dark);
-    border-top: 1px solid var(--bg-highlight);
+    border-top: 1px solid rgba(87, 82, 121, 0.08);
     z-index: 10;
   }
 
@@ -239,7 +239,7 @@
     display: none;
     grid-column: 1 / -1;
     background-color: var(--bg-dark);
-    border-top: 1px solid var(--bg-highlight);
+    border-top: 1px solid rgba(87, 82, 121, 0.08);
     z-index: 20;
     justify-content: space-around;
     padding: 8px 0;

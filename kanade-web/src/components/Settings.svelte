@@ -84,7 +84,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.65);
+    background: rgba(152, 147, 165, 0.35);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     padding: 24px;
@@ -99,7 +99,7 @@
     border: 1px solid var(--bg-highlight);
     border-radius: 16px;
     background: linear-gradient(180deg, var(--bg-dark), var(--bg));
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 24px 80px rgba(87, 82, 121, 0.12);
   }
 
   .header {
@@ -213,7 +213,7 @@
   .badge {
     padding: 4px 8px;
     border-radius: 999px;
-    background: rgba(122, 162, 247, 0.14);
+    background: rgba(215, 130, 126, 0.14);
     color: var(--accent);
     font-size: 11px;
     font-weight: 600;

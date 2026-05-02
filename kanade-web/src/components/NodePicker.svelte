@@ -58,7 +58,7 @@
     padding: 4px;
     min-width: 120px;
     z-index: 50;
-    box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+    box-shadow: 0 -4px 12px rgba(87, 82, 121, 0.1);
     display: flex;
     flex-direction: column;
     gap: 2px;

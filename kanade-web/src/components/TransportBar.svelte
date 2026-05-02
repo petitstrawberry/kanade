@@ -213,8 +213,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-secondary, #1a1b26);
-    color: var(--fg-muted, #555);
+    background: var(--bg-secondary, #f2e9e1);
+    color: var(--fg-muted, #9893a5);
   }
   .artwork svg { width: 50%; height: 50%; }
 
@@ -270,7 +270,7 @@
   }
   .btn:hover { color: var(--fg); }
   .btn.active { color: var(--accent); }
-  .btn.ic-large { width: 40px; height: 40px; color: var(--fg); }
+  .btn.ic-large { width: 40px; height: 40px; color: var(--fg-dark); }
 
   .playback-bar {
     display: flex;

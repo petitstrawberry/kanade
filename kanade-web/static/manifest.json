@@ -4,8 +4,8 @@
   "description": "Self-hosted music player",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#1a1b26",
-  "theme_color": "#1a1b26",
+  "background_color": "#faf4ed",
+  "theme_color": "#faf4ed",
   "orientation": "portrait",
   "icons": [
     {

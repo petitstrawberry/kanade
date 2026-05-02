@@ -221,7 +221,7 @@
   .overlay-backdrop {
     position: fixed;
     inset: 0;
-    background-color: rgba(0, 0, 0, 0.7);
+    background-color: rgba(152, 147, 165, 0.35);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     z-index: 1000;
@@ -238,7 +238,7 @@
     align-items: center;
     justify-content: center;
     background: radial-gradient(circle at 50% 0%, var(--bg-highlight), var(--bg));
-    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 -10px 40px rgba(87, 82, 121, 0.1);
   }
 
   .btn {
@@ -285,7 +285,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 20px 40px rgba(87, 82, 121, 0.12);
     color: var(--accent);
     flex-shrink: 0;
     overflow: hidden;
@@ -311,7 +311,7 @@
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.8);
+    background: rgba(87, 82, 121, 0.35);
     opacity: 0;
     transition: opacity 0.15s;
     padding: 16px;
@@ -519,7 +519,7 @@
   }
 
   .format-badge {
-    background-color: rgba(0, 0, 0, 0.2);
+    background-color: rgba(87, 82, 121, 0.08);
     border: 1px solid var(--fg-gutter);
     color: var(--cyan);
     padding: 4px 10px;
@@ -567,7 +567,7 @@
       width: min(340px, 72vw);
       height: min(340px, 72vw);
       border-radius: 12px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 20px 40px rgba(87, 82, 121, 0.12);
       cursor: pointer;
     }
 

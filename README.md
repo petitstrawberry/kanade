@@ -11,6 +11,8 @@ Kanade is built for users first: point it at your music folder, start the
 server, connect an output node, and play. If you want the implementation
 details later, see [DESIGN.md](DESIGN.md) and [protocols.md](protocols.md).
 
+![Web UI screenshot](docs/web-ui.png)
+
 ## Features
 
 - **Play your own library** — scan local music folders and browse albums,
