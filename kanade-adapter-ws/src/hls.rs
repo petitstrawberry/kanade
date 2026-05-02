@@ -173,7 +173,13 @@ impl HlsCache {
         self.enforce_size_limit(None).await?;
 
         let variant_dir = self.variant_dir(track_id, variant);
-        if let Ok(segments) = HlsSegments::open(&variant_dir) {
+        let maybe_segments = tokio::task::spawn_blocking({
+            let variant_dir = variant_dir.clone();
+            move || HlsSegments::open(&variant_dir)
+        })
+        .await
+        .map_err(HlsError::Join)?;
+        if let Ok(segments) = maybe_segments {
             segments.touch().await?;
             return Ok(segments);
         }
