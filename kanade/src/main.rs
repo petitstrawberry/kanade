@@ -19,8 +19,8 @@ use kanade_scanner::spawn_background_scan;
 use tracing::{info, warn};
 
 use kanade_adapter_openhome::{OpenHomeBroadcaster, OpenHomeServer};
-use kanade_adapter_ws::{build_router, AppState, HlsCache, MediaKeyStore, WsBroadcaster};
 use kanade_adapter_ws::server::MEDIA_URL_TTL_SECS;
+use kanade_adapter_ws::{build_router, AppState, HlsCache, MediaKeyStore, WsBroadcaster};
 
 mod persist;
 use persist::DatabaseStatePersister;
@@ -131,6 +131,15 @@ async fn main() -> Result<()> {
             .into_iter()
             .filter(|s| s.node_id != "__global__")
             .map(|s| {
+                let inferred_device_id = s
+                    .node_id
+                    .strip_prefix("local-")
+                    .map(str::to_string);
+                let node_type = if matches!(s.node_type, NodeType::Local) || inferred_device_id.is_some() {
+                    NodeType::Local
+                } else {
+                    NodeType::Remote
+                };
                 let queue: Vec<_> = s.queue_file_paths
                     .iter()
                     .filter_map(|path| db.get_track_by_path(path).ok().flatten())
@@ -148,12 +157,13 @@ async fn main() -> Result<()> {
                     status: kanade_core::model::PlaybackStatus::Stopped,
                     position_secs: 0.0,
                     volume: s.volume,
-                    node_type: NodeType::Remote,
+                    node_type,
                     queue,
                     current_index,
                     repeat,
                     shuffle: s.shuffle,
-                    device_id: None,
+                    device_id: s.device_id.or(inferred_device_id),
+                    disconnected_at: s.disconnected_at,
                 }
             })
             .collect();

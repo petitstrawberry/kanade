@@ -970,13 +970,12 @@ async fn dispatch_command(
                     state
                         .nodes
                         .iter()
-                        .find(|n| {
+                        .filter(|n| {
                             n.node_type == kanade_core::model::NodeType::Local
                                 && n.device_id.as_deref() == Some(did)
                         })
-                        .and_then(|node| {
-                            let node_id = node.id.clone();
-                            local_session_owner(local_session_owners, &node_id)
+                        .find_map(|node| {
+                            local_session_owner(local_session_owners, &node.id)
                                 .filter(|owner| owner != connection_id)
                         })
                 };
@@ -997,7 +996,11 @@ async fn dispatch_command(
                                     );
                                 }
                             }
-                            claim_local_session_owner(local_session_owners, &node_id, connection_id);
+                            claim_local_session_owner(
+                                local_session_owners,
+                                &node_id,
+                                connection_id,
+                            );
                             Ok(())
                         }
                         Err(e) => Err(e),
@@ -1024,7 +1027,8 @@ async fn dispatch_command(
         }
         WsCommand::LocalSessionStop => {
             if let Some(ref nid) = *local_node_id {
-                if local_session_owner(local_session_owners, nid).as_deref() == Some(connection_id) {
+                if local_session_owner(local_session_owners, nid).as_deref() == Some(connection_id)
+                {
                     if let Err(e) = core.local_session_stop(nid).await {
                         warn!(error = %e, "local_session_stop error");
                     }
@@ -1046,7 +1050,8 @@ async fn dispatch_command(
             shuffle,
         } => {
             if let Some(ref nid) = *local_node_id {
-                if local_session_owner(local_session_owners, nid).as_deref() == Some(connection_id) {
+                if local_session_owner(local_session_owners, nid).as_deref() == Some(connection_id)
+                {
                     if let Err(e) = core
                         .local_session_update(
                             nid,
@@ -1496,7 +1501,11 @@ fn verify_media_auth(
     let expected_sig = compute_media_signature(&key, path, auth_query.exp);
     let provided_sig = hex::decode(&auth_query.sig).map_err(|_| StatusCode::FORBIDDEN)?;
 
-    if expected_sig.as_slice().ct_eq(provided_sig.as_slice()).into() {
+    if expected_sig
+        .as_slice()
+        .ct_eq(provided_sig.as_slice())
+        .into()
+    {
         Ok(())
     } else {
         Err(StatusCode::FORBIDDEN)
@@ -1515,10 +1524,22 @@ fn rewrite_m3u8_with_signed_urls(
     let mut out = String::with_capacity(m3u8.len() * 2);
     for line in m3u8.lines() {
         if line.starts_with("#EXT-X-MAP:URI=") {
-            let signed = build_signed_media_url(media_base_url, &format!("/media/hls/{track_id}/{variant}/init.mp4"), kid, key, exp);
+            let signed = build_signed_media_url(
+                media_base_url,
+                &format!("/media/hls/{track_id}/{variant}/init.mp4"),
+                kid,
+                key,
+                exp,
+            );
             out.push_str(&format!("#EXT-X-MAP:URI=\"{signed}\""));
         } else if !line.starts_with('#') && !line.is_empty() {
-            let signed = build_signed_media_url(media_base_url, &format!("/media/hls/{track_id}/{variant}/{line}"), kid, key, exp);
+            let signed = build_signed_media_url(
+                media_base_url,
+                &format!("/media/hls/{track_id}/{variant}/{line}"),
+                kid,
+                key,
+                exp,
+            );
             out.push_str(&signed);
         } else {
             out.push_str(line);

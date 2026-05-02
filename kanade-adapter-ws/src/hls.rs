@@ -11,22 +11,24 @@ use std::{
 
 use alac_encoder::{AlacEncoder, FormatDescription, PcmFormat, DEFAULT_FRAMES_PER_PACKET};
 use hls_m3u8::{
-    MediaPlaylist, MediaSegment,
     tags::{ExtInf, ExtXMap},
     types::PlaylistType,
+    MediaPlaylist, MediaSegment,
 };
-use lofty::{file::{FileType, TaggedFileExt}, prelude::AudioFile, probe::Probe};
+use lofty::{
+    file::{FileType, TaggedFileExt},
+    prelude::AudioFile,
+    probe::Probe,
+};
 use shiguredo_mp4::{
-    BoxSize, BoxType, FixedPointNumber, TrackKind, Uint,
     boxes::{
         AudioSampleEntryFields, DflaBox, DopsBox, EsdsBox, FlacBox, FlacMetadataBlock, Mp4aBox,
         OpusBox, SampleEntry, UnknownBox,
     },
     demux::{Input, Mp4FileDemuxer},
-    descriptors::{
-        DecoderConfigDescriptor, DecoderSpecificInfo, EsDescriptor, SlConfigDescriptor,
-    },
+    descriptors::{DecoderConfigDescriptor, DecoderSpecificInfo, EsDescriptor, SlConfigDescriptor},
     mux::{Fmp4SegmentMuxer, MuxError, Sample},
+    BoxSize, BoxType, FixedPointNumber, TrackKind, Uint,
 };
 use thiserror::Error;
 use tokio::{fs, sync::Mutex};
@@ -118,7 +120,12 @@ impl HlsCache {
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 let db_dir = std::env::var("DB_PATH")
-                    .map(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")))
+                    .map(|p| {
+                        PathBuf::from(p)
+                            .parent()
+                            .map(|d| d.to_path_buf())
+                            .unwrap_or_else(|| PathBuf::from("."))
+                    })
                     .unwrap_or_else(|_| PathBuf::from("."));
                 db_dir.join(".hls-cache")
             });
@@ -156,7 +163,10 @@ impl HlsCache {
         let key = format!("{track_id}/{variant}");
         let lock = {
             let mut locks = self.locks.lock().await;
-            locks.entry(key).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+            locks
+                .entry(key)
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
         };
         let _guard = lock.lock().await;
 
@@ -316,27 +326,51 @@ struct AlacPcm24;
 struct AlacPcm32;
 
 impl PcmFormat for AlacPcm16 {
-    fn bits() -> u32 { 16 }
-    fn bytes() -> u32 { 2 }
-    fn flags() -> u32 { 4 }
+    fn bits() -> u32 {
+        16
+    }
+    fn bytes() -> u32 {
+        2
+    }
+    fn flags() -> u32 {
+        4
+    }
 }
 
 impl PcmFormat for AlacPcm20 {
-    fn bits() -> u32 { 20 }
-    fn bytes() -> u32 { 3 }
-    fn flags() -> u32 { 4 }
+    fn bits() -> u32 {
+        20
+    }
+    fn bytes() -> u32 {
+        3
+    }
+    fn flags() -> u32 {
+        4
+    }
 }
 
 impl PcmFormat for AlacPcm24 {
-    fn bits() -> u32 { 24 }
-    fn bytes() -> u32 { 3 }
-    fn flags() -> u32 { 4 }
+    fn bits() -> u32 {
+        24
+    }
+    fn bytes() -> u32 {
+        3
+    }
+    fn flags() -> u32 {
+        4
+    }
 }
 
 impl PcmFormat for AlacPcm32 {
-    fn bits() -> u32 { 32 }
-    fn bytes() -> u32 { 4 }
-    fn flags() -> u32 { 4 }
+    fn bits() -> u32 {
+        32
+    }
+    fn bytes() -> u32 {
+        4
+    }
+    fn flags() -> u32 {
+        4
+    }
 }
 
 #[allow(dead_code)]
@@ -370,7 +404,9 @@ fn remux_source(source_path: &Path, segment_duration: Duration) -> Result<Remuxe
         FileType::Aiff => remux_aiff(source_path, &properties),
         FileType::Opus => remux_opus(source_path, &properties),
         FileType::Mp4 => remux_mp4(source_path, segment_duration),
-        _ => Err(HlsError::Unsupported("file type is not supported for HLS remux")),
+        _ => Err(HlsError::Unsupported(
+            "file type is not supported for HLS remux",
+        )),
     }
 }
 
@@ -438,7 +474,9 @@ fn write_hls_output(
         if index == 0 {
             builder.map(ExtXMap::new("init.mp4"));
         }
-        builder.duration(ExtInf::new(Duration::from_secs_f64(chunk.duration_secs.max(0.001))));
+        builder.duration(ExtInf::new(Duration::from_secs_f64(
+            chunk.duration_secs.max(0.001),
+        )));
         builder.uri(format!("seg{index}.m4s"));
         playlist_segments.push(
             builder
@@ -471,9 +509,8 @@ fn write_hls_output(
 }
 
 fn split_into_segments(remuxed: &RemuxedTrack, segment_duration: Duration) -> Vec<SegmentChunk> {
-    let target_duration_units = ((segment_duration.as_secs_f64() * remuxed.timescale.get() as f64)
-        .round() as u64)
-        .max(1);
+    let target_duration_units =
+        ((segment_duration.as_secs_f64() * remuxed.timescale.get() as f64).round() as u64).max(1);
 
     let mut chunks = Vec::new();
     let mut current_start = 0usize;
@@ -484,7 +521,10 @@ fn split_into_segments(remuxed: &RemuxedTrack, segment_duration: Duration) -> Ve
     for sample in &remuxed.samples {
         let exceeds_target = current_duration > 0
             && current_duration.saturating_add(sample.duration as u64) > target_duration_units;
-        let sample_entry = sample.sample_entry.as_ref().or(remuxed.sample_entry.as_ref());
+        let sample_entry = sample
+            .sample_entry
+            .as_ref()
+            .or(remuxed.sample_entry.as_ref());
         let entry_changed = current_len > 0
             && match (current_entry, sample_entry) {
                 (Some(existing), Some(next)) => !Arc::ptr_eq(existing, next),
@@ -583,7 +623,10 @@ fn remux_mp4(source_path: &Path, _segment_duration: Duration) -> Result<RemuxedT
     })
 }
 
-fn remux_flac(source_path: &Path, properties: &lofty::properties::FileProperties) -> Result<RemuxedTrack, HlsError> {
+fn remux_flac(
+    source_path: &Path,
+    properties: &lofty::properties::FileProperties,
+) -> Result<RemuxedTrack, HlsError> {
     let bytes = std::fs::read(source_path)?;
     if !bytes.starts_with(b"fLaC") {
         return Err(HlsError::InvalidData("flac magic missing".to_string()));
@@ -649,7 +692,10 @@ fn remux_flac(source_path: &Path, properties: &lofty::properties::FileProperties
     })
 }
 
-fn remux_mp3(source_path: &Path, properties: &lofty::properties::FileProperties) -> Result<RemuxedTrack, HlsError> {
+fn remux_mp3(
+    source_path: &Path,
+    properties: &lofty::properties::FileProperties,
+) -> Result<RemuxedTrack, HlsError> {
     let bytes = std::fs::read(source_path)?;
     let mut offset = skip_id3v2(&bytes);
     let sample_rate = properties
@@ -751,8 +797,8 @@ fn remux_aac_adts(source_path: &Path) -> Result<RemuxedTrack, HlsError> {
         offset = end;
     }
 
-    let sample_rate = sample_rate
-        .ok_or_else(|| HlsError::InvalidData("no AAC ADTS frames found".to_string()))?;
+    let sample_rate =
+        sample_rate.ok_or_else(|| HlsError::InvalidData("no AAC ADTS frames found".to_string()))?;
     let _channels = channels.unwrap_or(2);
     let _audio_object_type = audio_object_type.unwrap_or(2);
     Ok(RemuxedTrack {
@@ -763,7 +809,10 @@ fn remux_aac_adts(source_path: &Path) -> Result<RemuxedTrack, HlsError> {
     })
 }
 
-fn remux_wav(source_path: &Path, properties: &lofty::properties::FileProperties) -> Result<RemuxedTrack, HlsError> {
+fn remux_wav(
+    source_path: &Path,
+    properties: &lofty::properties::FileProperties,
+) -> Result<RemuxedTrack, HlsError> {
     let bytes = std::fs::read(source_path)?;
     let wav = parse_wav_pcm(&bytes)?;
     let sample_rate = properties.sample_rate().unwrap_or(wav.sample_rate);
@@ -779,7 +828,13 @@ fn remux_wav(source_path: &Path, properties: &lofty::properties::FileProperties)
         );
     }
     let timescale = nonzero(sample_rate)?;
-    let entry = Arc::new(unknown_audio_sample_entry(*b"lpcm", sample_rate, channels, bit_depth, Vec::new())?);
+    let entry = Arc::new(unknown_audio_sample_entry(
+        *b"lpcm",
+        sample_rate,
+        channels,
+        bit_depth,
+        Vec::new(),
+    )?);
     let bytes_per_frame = (u32::from(channels) * u32::from(bit_depth) / 8).max(1) as usize;
 
     Ok(RemuxedTrack {
@@ -796,7 +851,10 @@ fn remux_wav(source_path: &Path, properties: &lofty::properties::FileProperties)
     })
 }
 
-fn remux_aiff(source_path: &Path, properties: &lofty::properties::FileProperties) -> Result<RemuxedTrack, HlsError> {
+fn remux_aiff(
+    source_path: &Path,
+    properties: &lofty::properties::FileProperties,
+) -> Result<RemuxedTrack, HlsError> {
     let bytes = std::fs::read(source_path)?;
     let aiff = parse_aiff_pcm(&bytes)?;
     let sample_rate = properties.sample_rate().unwrap_or(aiff.sample_rate);
@@ -812,7 +870,13 @@ fn remux_aiff(source_path: &Path, properties: &lofty::properties::FileProperties
         );
     }
     let timescale = nonzero(sample_rate)?;
-    let entry = Arc::new(unknown_audio_sample_entry(*b"lpcm", sample_rate, channels, bit_depth, Vec::new())?);
+    let entry = Arc::new(unknown_audio_sample_entry(
+        *b"lpcm",
+        sample_rate,
+        channels,
+        bit_depth,
+        Vec::new(),
+    )?);
     let bytes_per_frame = (u32::from(channels) * u32::from(bit_depth) / 8).max(1) as usize;
 
     Ok(RemuxedTrack {
@@ -829,7 +893,10 @@ fn remux_aiff(source_path: &Path, properties: &lofty::properties::FileProperties
     })
 }
 
-fn remux_opus(source_path: &Path, properties: &lofty::properties::FileProperties) -> Result<RemuxedTrack, HlsError> {
+fn remux_opus(
+    source_path: &Path,
+    properties: &lofty::properties::FileProperties,
+) -> Result<RemuxedTrack, HlsError> {
     let opus = parse_ogg_opus_packets(&std::fs::read(source_path)?)?;
     let sample_rate = 48_000u32;
     let channels = properties.channels().unwrap_or(opus.channels);
@@ -885,14 +952,20 @@ fn pcm_chunks(
     entry: Option<Arc<SampleEntry>>,
 ) -> Vec<RemuxSampleRef> {
     let frames_per_chunk = (sample_rate as u64 * segment_duration.as_secs().max(1)) as usize;
-    let chunk_size = frames_per_chunk.saturating_mul(bytes_per_frame).max(bytes_per_frame);
+    let chunk_size = frames_per_chunk
+        .saturating_mul(bytes_per_frame)
+        .max(bytes_per_frame);
     let mut offset = data_range.start;
     let mut samples = Vec::new();
 
     while offset < data_range.end {
         let next_end = (offset + chunk_size).min(data_range.end);
         let aligned_end = next_end - ((next_end - offset) % bytes_per_frame);
-        let end = if aligned_end == offset { data_range.end } else { aligned_end };
+        let end = if aligned_end == offset {
+            data_range.end
+        } else {
+            aligned_end
+        };
         let frame_count = ((end - offset) / bytes_per_frame).max(1) as u32;
         samples.push(RemuxSampleRef {
             range: offset..end,
@@ -918,7 +991,9 @@ fn remux_pcm_as_alac(
     let bytes_per_sample = pcm_bytes_per_sample(bit_depth)?;
     let bytes_per_frame = bytes_per_sample.saturating_mul(channels as usize);
     if bytes_per_frame == 0 {
-        return Err(HlsError::InvalidData("PCM frame size must be non-zero".to_string()));
+        return Err(HlsError::InvalidData(
+            "PCM frame size must be non-zero".to_string(),
+        ));
     }
     if pcm_bytes.len() % bytes_per_frame != 0 {
         return Err(HlsError::InvalidData(
@@ -928,7 +1003,12 @@ fn remux_pcm_as_alac(
 
     let normalized_pcm = pcm_to_alac_bytes(pcm_bytes, bit_depth, source_big_endian)?;
     let input_format = alac_pcm_input_format(sample_rate, channels_u32, bit_depth)?;
-    let output_format = alac_output_format(sample_rate, DEFAULT_FRAMES_PER_PACKET, channels_u32, bit_depth);
+    let output_format = alac_output_format(
+        sample_rate,
+        DEFAULT_FRAMES_PER_PACKET,
+        channels_u32,
+        bit_depth,
+    );
     let mut encoder = AlacEncoder::new(&output_format);
     let magic_cookie = encoder.magic_cookie();
     let mut alac_inner_box = Vec::with_capacity(12 + magic_cookie.len());
@@ -970,7 +1050,9 @@ fn remux_pcm_as_alac(
     }
 
     if samples.is_empty() {
-        return Err(HlsError::InvalidData("no ALAC packets were produced from PCM input".to_string()));
+        return Err(HlsError::InvalidData(
+            "no ALAC packets were produced from PCM input".to_string(),
+        ));
     }
 
     Ok(RemuxedTrack {
@@ -1037,7 +1119,8 @@ fn alac_output_format(
     bit_depth: u8,
 ) -> FormatDescription {
     const _: () = assert!(
-        std::mem::size_of::<AlacFormatDescriptionLayout>() == std::mem::size_of::<FormatDescription>(),
+        std::mem::size_of::<AlacFormatDescriptionLayout>()
+            == std::mem::size_of::<FormatDescription>(),
         "AlacFormatDescriptionLayout must match FormatDescription size"
     );
 
@@ -1170,7 +1253,9 @@ fn rebuild_dfla_blocks(mut blocks: Vec<FlacMetadataBlock>) -> Vec<FlacMetadataBl
     blocks
 }
 
-fn parse_flac_metadata(bytes: &[u8]) -> Result<(Vec<FlacMetadataBlock>, FlacStreamInfo, usize), HlsError> {
+fn parse_flac_metadata(
+    bytes: &[u8],
+) -> Result<(Vec<FlacMetadataBlock>, FlacStreamInfo, usize), HlsError> {
     let mut offset = 4usize;
     let mut blocks = Vec::new();
     let mut streaminfo = None;
@@ -1212,9 +1297,8 @@ fn parse_flac_metadata(bytes: &[u8]) -> Result<(Vec<FlacMetadataBlock>, FlacStre
 
     Ok((
         blocks,
-        streaminfo.ok_or_else(|| {
-            HlsError::InvalidData("FLAC streaminfo block missing".to_string())
-        })?,
+        streaminfo
+            .ok_or_else(|| HlsError::InvalidData("FLAC streaminfo block missing".to_string()))?,
         offset,
     ))
 }
@@ -1227,9 +1311,8 @@ fn parse_flac_streaminfo(block: &[u8]) -> Result<FlacStreamInfo, HlsError> {
     }
 
     let max_block_size = u16::from_be_bytes([block[2], block[3]]);
-    let sample_rate = ((block[10] as u32) << 12)
-        | ((block[11] as u32) << 4)
-        | ((block[12] as u32 & 0xF0) >> 4);
+    let sample_rate =
+        ((block[10] as u32) << 12) | ((block[11] as u32) << 4) | ((block[12] as u32 & 0xF0) >> 4);
     let channels = ((block[12] & 0x0E) >> 1) + 1;
     let bits_per_sample = (((block[12] & 0x01) << 4) | ((block[13] & 0xF0) >> 4)) + 1;
 
@@ -1335,7 +1418,8 @@ fn parse_flac_frame_block_size(frame: &[u8], streaminfo: &FlacStreamInfo) -> Opt
             value
         }
         7 => {
-            let value = u16::from_be_bytes([*frame.get(offset)?, *frame.get(offset + 1)?]) as u32 + 1;
+            let value =
+                u16::from_be_bytes([*frame.get(offset)?, *frame.get(offset + 1)?]) as u32 + 1;
             offset += 2;
             value
         }
@@ -1402,7 +1486,12 @@ fn parse_mp3_frame(bytes: &[u8]) -> Option<Mp3FrameInfo> {
     let sample_rate_index = (bytes[2] >> 2) & 0x03;
     let padding = ((bytes[2] >> 1) & 0x01) as usize;
 
-    if version_id == 1 || layer == 0 || bitrate_index == 0 || bitrate_index == 0x0F || sample_rate_index == 0x03 {
+    if version_id == 1
+        || layer == 0
+        || bitrate_index == 0
+        || bitrate_index == 0x0F
+        || sample_rate_index == 0x03
+    {
         return None;
     }
 
@@ -1423,13 +1512,21 @@ fn parse_mp3_frame(bytes: &[u8]) -> Option<Mp3FrameInfo> {
     };
     let bitrate_kbps = if is_mpeg1 {
         [
-            [32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
-            [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
-            [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+            [
+                32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448,
+            ],
+            [
+                32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384,
+            ],
+            [
+                32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+            ],
         ][layer_index][bitrate_index as usize - 1]
     } else {
         [
-            [32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+            [
+                32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256,
+            ],
             [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
             [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
         ][layer_index][bitrate_index as usize - 1]
@@ -1533,7 +1630,8 @@ fn parse_wav_pcm(bytes: &[u8]) -> Result<WavInfo, HlsError> {
 
     while offset + 8 <= bytes.len() {
         let chunk_id = &bytes[offset..offset + 4];
-        let chunk_size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let chunk_size =
+            u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
         offset += 8;
         let chunk_end = offset.saturating_add(chunk_size);
         if chunk_end > bytes.len() {
@@ -1542,9 +1640,15 @@ fn parse_wav_pcm(bytes: &[u8]) -> Result<WavInfo, HlsError> {
 
         match chunk_id {
             b"fmt " if chunk_size >= 16 => {
-                channels = Some(u16::from_le_bytes(bytes[offset + 2..offset + 4].try_into().unwrap()) as u8);
-                sample_rate = Some(u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()));
-                bits_per_sample = Some(u16::from_le_bytes(bytes[offset + 14..offset + 16].try_into().unwrap()) as u8);
+                channels = Some(u16::from_le_bytes(
+                    bytes[offset + 2..offset + 4].try_into().unwrap(),
+                ) as u8);
+                sample_rate = Some(u32::from_le_bytes(
+                    bytes[offset + 4..offset + 8].try_into().unwrap(),
+                ));
+                bits_per_sample = Some(u16::from_le_bytes(
+                    bytes[offset + 14..offset + 16].try_into().unwrap(),
+                ) as u8);
             }
             b"data" => {
                 data = Some((offset, chunk_size));
@@ -1555,10 +1659,13 @@ fn parse_wav_pcm(bytes: &[u8]) -> Result<WavInfo, HlsError> {
         offset = chunk_end + (chunk_size % 2);
     }
 
-    let (data_offset, data_len) = data.ok_or_else(|| HlsError::InvalidData("WAV data chunk missing".to_string()))?;
+    let (data_offset, data_len) =
+        data.ok_or_else(|| HlsError::InvalidData("WAV data chunk missing".to_string()))?;
     Ok(WavInfo {
-        sample_rate: sample_rate.ok_or_else(|| HlsError::InvalidData("WAV sample rate missing".to_string()))?,
-        channels: channels.ok_or_else(|| HlsError::InvalidData("WAV channels missing".to_string()))?,
+        sample_rate: sample_rate
+            .ok_or_else(|| HlsError::InvalidData("WAV sample rate missing".to_string()))?,
+        channels: channels
+            .ok_or_else(|| HlsError::InvalidData("WAV channels missing".to_string()))?,
         bits_per_sample: bits_per_sample.unwrap_or(16),
         data_offset,
         data_len,
@@ -1580,7 +1687,9 @@ fn parse_aiff_pcm(bytes: &[u8]) -> Result<AiffInfo, HlsError> {
     }
     let form_type = &bytes[8..12];
     if form_type != b"AIFF" && form_type != b"AIFC" {
-        return Err(HlsError::InvalidData("unsupported AIFF form type".to_string()));
+        return Err(HlsError::InvalidData(
+            "unsupported AIFF form type".to_string(),
+        ));
     }
 
     let mut offset = 12usize;
@@ -1591,7 +1700,8 @@ fn parse_aiff_pcm(bytes: &[u8]) -> Result<AiffInfo, HlsError> {
 
     while offset + 8 <= bytes.len() {
         let chunk_id = &bytes[offset..offset + 4];
-        let chunk_size = u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let chunk_size =
+            u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
         offset += 8;
         let chunk_end = offset.saturating_add(chunk_size);
         if chunk_end > bytes.len() {
@@ -1600,12 +1710,16 @@ fn parse_aiff_pcm(bytes: &[u8]) -> Result<AiffInfo, HlsError> {
 
         match chunk_id {
             b"COMM" if chunk_size >= 18 => {
-                channels = Some(u16::from_be_bytes(bytes[offset..offset + 2].try_into().unwrap()) as u8);
-                bits_per_sample = Some(u16::from_be_bytes(bytes[offset + 6..offset + 8].try_into().unwrap()) as u8);
+                channels =
+                    Some(u16::from_be_bytes(bytes[offset..offset + 2].try_into().unwrap()) as u8);
+                bits_per_sample = Some(u16::from_be_bytes(
+                    bytes[offset + 6..offset + 8].try_into().unwrap(),
+                ) as u8);
                 sample_rate = Some(parse_extended_f80(&bytes[offset + 8..offset + 18])? as u32);
             }
             b"SSND" if chunk_size >= 8 => {
-                let data_offset_in_chunk = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+                let data_offset_in_chunk =
+                    u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
                 let payload_offset = offset + 8 + data_offset_in_chunk;
                 let payload_len = chunk_size.saturating_sub(8 + data_offset_in_chunk);
                 data = Some((payload_offset, payload_len));
@@ -1616,10 +1730,13 @@ fn parse_aiff_pcm(bytes: &[u8]) -> Result<AiffInfo, HlsError> {
         offset = chunk_end + (chunk_size % 2);
     }
 
-    let (data_offset, data_len) = data.ok_or_else(|| HlsError::InvalidData("AIFF SSND chunk missing".to_string()))?;
+    let (data_offset, data_len) =
+        data.ok_or_else(|| HlsError::InvalidData("AIFF SSND chunk missing".to_string()))?;
     Ok(AiffInfo {
-        sample_rate: sample_rate.ok_or_else(|| HlsError::InvalidData("AIFF sample rate missing".to_string()))?,
-        channels: channels.ok_or_else(|| HlsError::InvalidData("AIFF channels missing".to_string()))?,
+        sample_rate: sample_rate
+            .ok_or_else(|| HlsError::InvalidData("AIFF sample rate missing".to_string()))?,
+        channels: channels
+            .ok_or_else(|| HlsError::InvalidData("AIFF channels missing".to_string()))?,
         bits_per_sample: bits_per_sample.unwrap_or(16),
         data_offset,
         data_len,
@@ -1628,7 +1745,9 @@ fn parse_aiff_pcm(bytes: &[u8]) -> Result<AiffInfo, HlsError> {
 
 fn parse_extended_f80(bytes: &[u8]) -> Result<f64, HlsError> {
     if bytes.len() != 10 {
-        return Err(HlsError::InvalidData("invalid AIFF extended float".to_string()));
+        return Err(HlsError::InvalidData(
+            "invalid AIFF extended float".to_string(),
+        ));
     }
     let exponent = u16::from_be_bytes([bytes[0], bytes[1]]);
     if exponent == 0 && bytes[2..].iter().all(|byte| *byte == 0) {
@@ -1663,9 +1782,14 @@ fn parse_ogg_opus_packets(bytes: &[u8]) -> Result<OggOpusData, HlsError> {
         let lace_start = offset + 27;
         let data_start = lace_start + page_segments;
         if data_start > bytes.len() {
-            return Err(HlsError::InvalidData("invalid Ogg lacing table".to_string()));
+            return Err(HlsError::InvalidData(
+                "invalid Ogg lacing table".to_string(),
+            ));
         }
-        let total = bytes[lace_start..data_start].iter().map(|v| *v as usize).sum::<usize>();
+        let total = bytes[lace_start..data_start]
+            .iter()
+            .map(|v| *v as usize)
+            .sum::<usize>();
         let data_end = data_start + total;
         if data_end > bytes.len() {
             return Err(HlsError::InvalidData("invalid Ogg page size".to_string()));
@@ -1925,12 +2049,12 @@ mod tests {
         // Block size bits (6-8 bits in header)
         // 0b1100 = 4096 samples
         frame.push(0xC0 | (channels - 1) << 4 | 0x0); // channel_assignment=stereo, sample_size=16bit(0x1)
-        // Fix: sample size 16bit = 0x4 in 3-bit field
-        // Actually: byte2 = blocking_strategy(1) | block_size(4) | sample_rate(4)
-        // byte2 already set above. Let me redo:
-        // Byte 2: block_size(4 bits) | sample_rate(4 bits)
-        //   block_size for 4096 = 0xC
-        //   sample_rate for 44100 = 0x9
+                                                      // Fix: sample size 16bit = 0x4 in 3-bit field
+                                                      // Actually: byte2 = blocking_strategy(1) | block_size(4) | sample_rate(4)
+                                                      // byte2 already set above. Let me redo:
+                                                      // Byte 2: block_size(4 bits) | sample_rate(4 bits)
+                                                      //   block_size for 4096 = 0xC
+                                                      //   sample_rate for 44100 = 0x9
         frame[2] = 0xC9;
 
         // Byte 3: channel_assignment(4 bits) | sample_size(3 bits) | reserved(1 bit)
@@ -1947,7 +2071,7 @@ mod tests {
         frame.push(crc);
 
         // Subframes: one per channel, VERBATIM (encoding=0x00000001)
-        for _ in 0.. channels {
+        for _ in 0..channels {
             // Subframe header: zero bit + subframe type (6 bits) + wasted bits flag (1 bit)
             // VERBATIM = type 0b000001 = 0x01
             // Packed as: 0 (1 bit) | 000001 (6 bits) | 0 (1 bit) = 0x02
@@ -2082,11 +2206,7 @@ mod tests {
         let flac_dir = setup_test_flac();
         let flac_path = flac_dir.path().join("test_silence.flac");
         let cache_dir = tempfile::tempdir().unwrap();
-        let cache = HlsCache::with_options(
-            cache_dir.path(),
-            1,
-            Duration::from_secs(6),
-        );
+        let cache = HlsCache::with_options(cache_dir.path(), 1, Duration::from_secs(6));
 
         let _seg_a = cache
             .get_or_generate(&flac_path, "track-a", "lossless")
@@ -2111,20 +2231,21 @@ mod tests {
         let flac_path = flac_dir.path().join("test_silence.flac");
         let cache_dir = tempfile::tempdir().unwrap();
 
-        let segments = generate_hls(
-            &flac_path,
-            "sync-test-track",
-            "lossless",
-            cache_dir.path(),
-        )
-        .expect("sync HLS generation should succeed");
+        let segments = generate_hls(&flac_path, "sync-test-track", "lossless", cache_dir.path())
+            .expect("sync HLS generation should succeed");
 
         assert!(segments.init_path().exists());
         assert!(segments.playlist_path().exists());
         assert!(segments.segment_count() >= 1);
     }
 
-    fn generate_test_aiff(dir: &Path, sample_rate: u32, bits_per_sample: u8, channels: u8, duration_secs: f64) -> PathBuf {
+    fn generate_test_aiff(
+        dir: &Path,
+        sample_rate: u32,
+        bits_per_sample: u8,
+        channels: u8,
+        duration_secs: f64,
+    ) -> PathBuf {
         let num_frames = (sample_rate as f64 * duration_secs).round() as u32;
         let bytes_per_sample = (bits_per_sample as usize + 7) / 8;
         let bytes_per_frame = channels as usize * bytes_per_sample;
@@ -2159,7 +2280,9 @@ mod tests {
             out.push(0);
         }
 
-        let path = dir.join(format!("test_{sample_rate}_{bits_per_sample}bit_{channels}ch.aiff"));
+        let path = dir.join(format!(
+            "test_{sample_rate}_{bits_per_sample}bit_{channels}ch.aiff"
+        ));
         std::fs::write(&path, &out).unwrap();
         path
     }
@@ -2194,7 +2317,13 @@ mod tests {
     }
 
     /// Generate a minimal WAV file with the given parameters.
-    fn generate_test_wav(dir: &Path, sample_rate: u32, bits_per_sample: u8, channels: u8, duration_secs: f64) -> PathBuf {
+    fn generate_test_wav(
+        dir: &Path,
+        sample_rate: u32,
+        bits_per_sample: u8,
+        channels: u8,
+        duration_secs: f64,
+    ) -> PathBuf {
         let num_frames = (sample_rate as f64 * duration_secs).round() as u32;
         let bytes_per_sample = (bits_per_sample as usize + 7) / 8;
         let data_len = num_frames as usize * channels as usize * bytes_per_sample;
@@ -2223,7 +2352,9 @@ mod tests {
         out.extend_from_slice(&(data_len as u32).to_le_bytes());
         out.extend(std::iter::repeat(0u8).take(data_len));
 
-        let path = dir.join(format!("test_{sample_rate}_{bits_per_sample}bit_{channels}ch.wav"));
+        let path = dir.join(format!(
+            "test_{sample_rate}_{bits_per_sample}bit_{channels}ch.wav"
+        ));
         std::fs::write(&path, &out).unwrap();
         path
     }
@@ -2234,8 +2365,13 @@ mod tests {
         let aiff_path = generate_test_aiff(dir.path(), 96000, 32, 2, 0.5);
 
         let cache_dir = tempfile::tempdir().unwrap();
-        let segments = generate_hls(&aiff_path, "alac-test-96k-32bit", "lossless", cache_dir.path())
-            .expect("HLS generation from 96kHz AIFF should succeed via ALAC");
+        let segments = generate_hls(
+            &aiff_path,
+            "alac-test-96k-32bit",
+            "lossless",
+            cache_dir.path(),
+        )
+        .expect("HLS generation from 96kHz AIFF should succeed via ALAC");
 
         assert!(segments.init_path().exists());
         let init_data = std::fs::read(segments.init_path()).unwrap();
@@ -2259,8 +2395,13 @@ mod tests {
         let aiff_path = generate_test_aiff(dir.path(), 96000, 16, 2, 0.5);
 
         let cache_dir = tempfile::tempdir().unwrap();
-        let segments = generate_hls(&aiff_path, "alac-test-96k-16bit", "lossless", cache_dir.path())
-            .expect("HLS generation from 96kHz 16-bit AIFF should succeed via ALAC");
+        let segments = generate_hls(
+            &aiff_path,
+            "alac-test-96k-16bit",
+            "lossless",
+            cache_dir.path(),
+        )
+        .expect("HLS generation from 96kHz 16-bit AIFF should succeed via ALAC");
 
         assert!(segments.init_path().exists());
         let init_data = std::fs::read(segments.init_path()).unwrap();

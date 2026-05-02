@@ -31,7 +31,17 @@ impl StatePersister for DatabaseStatePersister {
         }
         .to_string();
 
-        let node_states: Vec<(String, Vec<String>, Option<usize>, u8, bool, String)> = state
+        let node_states: Vec<(
+            String,
+            Vec<String>,
+            Option<usize>,
+            u8,
+            bool,
+            String,
+            kanade_core::model::NodeType,
+            Option<String>,
+            Option<i64>,
+        )> = state
             .nodes
             .iter()
             .map(|node| {
@@ -48,8 +58,16 @@ impl StatePersister for DatabaseStatePersister {
                     node.volume,
                     node.shuffle,
                     rep.to_string(),
+                    node.node_type,
+                    node.device_id.clone(),
+                    node.disconnected_at,
                 )
             })
+            .collect();
+
+        let keep_node_ids: Vec<String> = node_states
+            .iter()
+            .map(|(node_id, ..)| node_id.clone())
             .collect();
 
         match tokio::task::spawn_blocking(move || {
@@ -65,9 +83,23 @@ impl StatePersister for DatabaseStatePersister {
                 &repeat,
             )?;
 
-            for (node_id, paths, idx, vol, shuf, rep) in &node_states {
-                guard.save_node_state(node_id, paths, *idx, *vol, *shuf, rep)?;
+            for (node_id, paths, idx, vol, shuf, rep, node_type, device_id, disconnected_at) in
+                &node_states
+            {
+                guard.save_node_state(
+                    node_id,
+                    paths,
+                    *idx,
+                    *vol,
+                    *shuf,
+                    rep,
+                    *node_type,
+                    device_id.as_deref(),
+                    *disconnected_at,
+                )?;
             }
+
+            guard.prune_node_states_except(&keep_node_ids)?;
 
             Ok::<(), anyhow::Error>(())
         })

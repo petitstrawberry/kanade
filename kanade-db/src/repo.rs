@@ -4,8 +4,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tracing::instrument;
 
 use kanade_core::model::{
-    Album, Artist, MatchMode, Playlist, PlaylistKind, SmartField, SmartFilter, SmartOperator,
-    SmartSort, Track,
+    Album, Artist, MatchMode, NodeType, Playlist, PlaylistKind, SmartField, SmartFilter,
+    SmartOperator, SmartSort, Track,
 };
 
 use crate::{hash::id_of, schema};
@@ -27,6 +27,9 @@ pub struct SavedNodeState {
     pub volume: u8,
     pub shuffle: bool,
     pub repeat: String,
+    pub node_type: NodeType,
+    pub device_id: Option<String>,
+    pub disconnected_at: Option<i64>,
 }
 
 impl Database {
@@ -223,30 +226,72 @@ impl Database {
         volume: u8,
         shuffle: bool,
         repeat: &str,
+        node_type: NodeType,
+        device_id: Option<&str>,
+        disconnected_at: Option<i64>,
     ) -> anyhow::Result<()> {
         let queue_json = serde_json::to_string(queue_file_paths)?;
         let current_index = current_index.map(|i| i as i64);
         let volume = i64::from(volume);
         let shuffle = i64::from(shuffle as u8);
+        let node_type = match node_type {
+            NodeType::Remote => "remote",
+            NodeType::Local => "local",
+        };
 
         self.conn.execute(
-            r#"INSERT INTO playback_state (node_id, queue, current_index, volume, shuffle, repeat, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch())
+            r#"INSERT INTO playback_state (node_id, queue, current_index, volume, shuffle, repeat, node_type, device_id, disconnected_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, unixepoch())
                ON CONFLICT(node_id) DO UPDATE SET
                    queue         = excluded.queue,
                    current_index = excluded.current_index,
                    volume        = excluded.volume,
                    shuffle       = excluded.shuffle,
                    repeat        = excluded.repeat,
+                   node_type     = excluded.node_type,
+                   device_id     = excluded.device_id,
+                   disconnected_at = excluded.disconnected_at,
                    updated_at    = unixepoch()"#,
-            params![node_id, queue_json, current_index, volume, shuffle, repeat],
+            params![
+                node_id,
+                queue_json,
+                current_index,
+                volume,
+                shuffle,
+                repeat,
+                node_type,
+                device_id,
+                disconnected_at,
+            ],
         )?;
+        Ok(())
+    }
+
+    pub fn prune_node_states_except(&self, keep_node_ids: &[String]) -> anyhow::Result<()> {
+        if keep_node_ids.is_empty() {
+            self.conn.execute(
+                "DELETE FROM playback_state WHERE node_id != '__global__'",
+                [],
+            )?;
+            return Ok(());
+        }
+
+        let placeholders = vec!["?"; keep_node_ids.len()].join(",");
+        let sql = format!(
+            "DELETE FROM playback_state WHERE node_id != '__global__' AND node_id NOT IN ({})",
+            placeholders
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> = keep_node_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        self.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
 
     pub fn load_all_node_states(&self) -> anyhow::Result<Vec<SavedNodeState>> {
         let mut stmt = self.conn.prepare(
-            "SELECT node_id, queue, current_index, volume, shuffle, repeat, active_output_id
+            "SELECT node_id, queue, current_index, volume, shuffle, repeat, active_output_id, node_type, device_id, disconnected_at
                  FROM playback_state ORDER BY node_id",
         )?;
         let mut rows = stmt.query([])?;
@@ -270,6 +315,12 @@ impl Database {
             let shuffle = row.get::<_, i64>(4)? != 0;
             let repeat: String = row.get(5)?;
             let active_output_id: Option<String> = row.get(6)?;
+            let node_type = match row.get::<_, String>(7)?.as_str() {
+                "local" => NodeType::Local,
+                _ => NodeType::Remote,
+            };
+            let device_id: Option<String> = row.get(8)?;
+            let disconnected_at: Option<i64> = row.get(9)?;
 
             out.push(SavedNodeState {
                 node_id,
@@ -279,6 +330,9 @@ impl Database {
                 volume,
                 shuffle,
                 repeat,
+                node_type,
+                device_id,
+                disconnected_at,
             });
         }
 
@@ -342,6 +396,9 @@ impl Database {
                 volume: 50,
                 shuffle,
                 repeat,
+                node_type: NodeType::Remote,
+                device_id: None,
+                disconnected_at: None,
             }));
         }
 
@@ -748,13 +805,11 @@ impl Database {
             anyhow::bail!("cannot edit tracks of a smart playlist");
         }
         let tx = self.conn.unchecked_transaction()?;
-        let next_pos: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_tracks WHERE playlist_id = ?1",
-                params![playlist_id],
-                |row| row.get(0),
-            )?;
+        let next_pos: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_tracks WHERE playlist_id = ?1",
+            params![playlist_id],
+            |row| row.get(0),
+        )?;
         {
             let mut stmt = self.conn.prepare(
                 "INSERT INTO playlist_tracks (playlist_id, position, track_id)
@@ -771,11 +826,7 @@ impl Database {
 
     /// Remove the entry at `position` from a normal playlist and renumber the
     /// remaining entries.
-    pub fn remove_playlist_track(
-        &self,
-        playlist_id: &str,
-        position: usize,
-    ) -> anyhow::Result<()> {
+    pub fn remove_playlist_track(&self, playlist_id: &str, position: usize) -> anyhow::Result<()> {
         let pl = self
             .get_playlist(playlist_id)?
             .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
@@ -859,9 +910,11 @@ impl Database {
             .ok_or_else(|| anyhow::anyhow!("playlist {playlist_id} not found"))?;
         match pl.kind {
             PlaylistKind::Normal => self.get_normal_playlist_tracks(playlist_id),
-            PlaylistKind::Smart { filter, limit, sort_by } => {
-                self.evaluate_smart_filter(&filter, sort_by, limit)
-            }
+            PlaylistKind::Smart {
+                filter,
+                limit,
+                sort_by,
+            } => self.evaluate_smart_filter(&filter, sort_by, limit),
         }
     }
 
@@ -932,9 +985,15 @@ impl Database {
         let where_clause = where_parts.join(joiner);
         let order_clause = match sort_by {
             Some(SmartSort::Title) => "ORDER BY title COLLATE NOCASE",
-            Some(SmartSort::Artist) => "ORDER BY artist COLLATE NOCASE, album_title, disc_number, track_number",
-            Some(SmartSort::Album) => "ORDER BY album_title COLLATE NOCASE, disc_number, track_number",
-            Some(SmartSort::Genre) => "ORDER BY genre COLLATE NOCASE, artist, album_title, disc_number, track_number",
+            Some(SmartSort::Artist) => {
+                "ORDER BY artist COLLATE NOCASE, album_title, disc_number, track_number"
+            }
+            Some(SmartSort::Album) => {
+                "ORDER BY album_title COLLATE NOCASE, disc_number, track_number"
+            }
+            Some(SmartSort::Genre) => {
+                "ORDER BY genre COLLATE NOCASE, artist, album_title, disc_number, track_number"
+            }
             None => "ORDER BY artist, album_title, disc_number, track_number, title",
         };
         let limit_clause = match limit {
@@ -1028,9 +1087,7 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
 /// Returns a nested `Result` because the JSON deserialisation of the
 /// `smart_filter` column is fallible at the application layer rather than at
 /// the rusqlite layer.
-fn row_to_playlist(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<anyhow::Result<Playlist>> {
+fn row_to_playlist(row: &rusqlite::Row<'_>) -> rusqlite::Result<anyhow::Result<Playlist>> {
     let id: String = row.get(0)?;
     let name: String = row.get(1)?;
     let description: Option<String> = row.get(2)?;
@@ -1352,8 +1409,18 @@ mod tests {
             "/music/album/02.flac".to_string(),
         ];
 
-        db.save_node_state("node-a", &queue, Some(1), 77, true, "all")
-            .unwrap();
+        db.save_node_state(
+            "node-a",
+            &queue,
+            Some(1),
+            77,
+            true,
+            "all",
+            NodeType::Remote,
+            None,
+            None,
+        )
+        .unwrap();
 
         let states = db.load_all_node_states().unwrap();
         assert_eq!(states.len(), 1);
@@ -1367,6 +1434,9 @@ mod tests {
                 volume: 77,
                 shuffle: true,
                 repeat: "all".to_string(),
+                node_type: NodeType::Remote,
+                device_id: None,
+                disconnected_at: None,
             }
         );
     }
@@ -1382,6 +1452,9 @@ mod tests {
             50,
             false,
             "off",
+            NodeType::Remote,
+            None,
+            None,
         )
         .unwrap();
 
@@ -1395,6 +1468,9 @@ mod tests {
             90,
             true,
             "one",
+            NodeType::Local,
+            Some("device-a"),
+            Some(123),
         )
         .unwrap();
 
@@ -1412,6 +1488,9 @@ mod tests {
         assert_eq!(states[0].volume, 90);
         assert!(states[0].shuffle);
         assert_eq!(states[0].repeat, "one");
+        assert_eq!(states[0].node_type, NodeType::Local);
+        assert_eq!(states[0].device_id.as_deref(), Some("device-a"));
+        assert_eq!(states[0].disconnected_at, Some(123));
     }
 
     #[test]
@@ -1681,7 +1760,9 @@ mod tests {
             limit: None,
             sort_by: None,
         };
-        assert!(db.update_playlist(&pl.id, None, None, Some(&smart)).is_err());
+        assert!(db
+            .update_playlist(&pl.id, None, None, Some(&smart))
+            .is_err());
 
         db.delete_playlist(&pl.id).unwrap();
         assert!(db.get_playlist(&pl.id).unwrap().is_none());

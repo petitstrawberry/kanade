@@ -83,6 +83,8 @@ pub struct Node {
     pub shuffle: bool,
     #[serde(default)]
     pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disconnected_at: Option<i64>,
 }
 
 impl Default for Node {
@@ -100,6 +102,7 @@ impl Default for Node {
             repeat: RepeatMode::Off,
             shuffle: false,
             device_id: None,
+            disconnected_at: None,
         }
     }
 }

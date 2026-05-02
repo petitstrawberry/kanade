@@ -214,9 +214,7 @@ pub type WsNodeCommand = NodeCommand;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kanade_core::model::{
-        MatchMode, SmartCondition, SmartField, SmartFilter, SmartOperator,
-    };
+    use kanade_core::model::{MatchMode, SmartCondition, SmartField, SmartFilter, SmartOperator};
 
     #[test]
     fn create_normal_playlist_command_roundtrip() {

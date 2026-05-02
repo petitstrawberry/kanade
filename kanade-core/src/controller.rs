@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::RwLock;
 use tracing::{info, instrument, warn};
@@ -22,6 +23,13 @@ struct NodeTransportState {
 struct OutputSlot {
     connection_id: String,
     output: Arc<dyn AudioOutput>,
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub struct Core {
@@ -342,19 +350,40 @@ impl Core {
         let mut s = self.state.write().await;
 
         if let Some(did) = device_id {
-            if let Some(existing) = s
+            let matching_ids: Vec<String> = s
                 .nodes
-                .iter_mut()
-                .find(|n| n.device_id.as_deref() == Some(did) && n.node_type == NodeType::Local)
+                .iter()
+                .filter(|n| n.node_type == NodeType::Local && n.device_id.as_deref() == Some(did))
+                .map(|n| n.id.clone())
+                .collect();
+
+            if let Some(canonical_id) = matching_ids
+                .iter()
+                .find(|id| s.node(id).is_some_and(|n| n.connected))
+                .cloned()
+                .or_else(|| matching_ids.first().cloned())
             {
-                let node_id = existing.id.clone();
-                if existing.connected {
-                    drop(s);
-                    return Ok(node_id);
+                for duplicate_id in matching_ids.iter().filter(|id| **id != canonical_id) {
+                    s.nodes.retain(|n| n.id != *duplicate_id);
+                    if s.selected_node_id.as_deref() == Some(duplicate_id.as_str()) {
+                        s.selected_node_id = Some(canonical_id.clone());
+                    }
                 }
-                existing.connected = true;
-                existing.name = device_name.to_string();
+
+                let node_id = canonical_id.clone();
+                if let Some(existing) = s.node_mut(&canonical_id) {
+                    existing.connected = true;
+                    existing.name = device_name.to_string();
+                    existing.device_id = Some(did.to_string());
+                    existing.disconnected_at = None;
+                }
                 drop(s);
+                self.transport_state.write().await.retain(|id, _| {
+                    id == &canonical_id || !matching_ids.iter().any(|dup| dup == id)
+                });
+                self.outputs.write().await.retain(|id, _| {
+                    id == &canonical_id || !matching_ids.iter().any(|dup| dup == id)
+                });
                 self.broadcast().await;
                 return Ok(node_id);
             }
@@ -370,6 +399,7 @@ impl Core {
             connected: true,
             node_type: NodeType::Local,
             device_id: device_id.map(String::from),
+            disconnected_at: None,
             ..Default::default()
         });
         drop(s);
@@ -401,6 +431,7 @@ impl Core {
                 return Err(CoreError::LocalSessionNotFound);
             }
             node.connected = false;
+            node.disconnected_at = Some(current_unix_timestamp());
         }
         self.broadcast().await;
         Ok(())
@@ -423,6 +454,7 @@ impl Core {
             if node.node_type != NodeType::Local {
                 return Err(CoreError::LocalSessionNotFound);
             }
+            node.connected = true;
             node.queue = queue;
             node.current_index = current_index;
             node.position_secs = position_secs;
@@ -430,6 +462,7 @@ impl Core {
             node.volume = volume;
             node.repeat = repeat;
             node.shuffle = shuffle;
+            node.disconnected_at = None;
         }
         self.broadcast().await;
         Ok(())
@@ -487,8 +520,53 @@ impl Core {
         Ok(())
     }
 
-    pub async fn cleanup_disconnected_nodes(&self, _max_age: std::time::Duration) {
-        let _ = _max_age;
+    pub async fn cleanup_disconnected_nodes(&self, max_age: std::time::Duration) {
+        let cutoff = current_unix_timestamp().saturating_sub(max_age.as_secs() as i64);
+
+        let removed_ids = {
+            let mut s = self.state.write().await;
+            let removed_ids: Vec<String> = s
+                .nodes
+                .iter()
+                .filter(|node| {
+                    node.node_type == NodeType::Local
+                        && !node.connected
+                        && node
+                            .disconnected_at
+                            .is_some_and(|disconnected_at| disconnected_at <= cutoff)
+                })
+                .map(|node| node.id.clone())
+                .collect();
+
+            if removed_ids.is_empty() {
+                return;
+            }
+
+            s.nodes
+                .retain(|node| !removed_ids.iter().any(|removed_id| removed_id == &node.id));
+            if s.selected_node_id
+                .as_ref()
+                .is_some_and(|selected| removed_ids.iter().any(|removed_id| removed_id == selected))
+            {
+                s.selected_node_id = s
+                    .nodes
+                    .iter()
+                    .find(|node| node.connected)
+                    .map(|node| node.id.clone());
+            }
+
+            removed_ids
+        };
+
+        self.transport_state
+            .write()
+            .await
+            .retain(|id, _| !removed_ids.iter().any(|removed_id| removed_id == id));
+        self.outputs
+            .write()
+            .await
+            .retain(|id, _| !removed_ids.iter().any(|removed_id| removed_id == id));
+        self.broadcast().await;
     }
 
     pub async fn select_node(&self, node_id: &str) -> Result<(), CoreError> {
@@ -1480,5 +1558,96 @@ mod tests {
         assert_eq!(s.current_index, Some(1));
         let node = s.node("default").unwrap();
         assert_eq!(node.position_secs, 8.0);
+    }
+
+    #[tokio::test]
+    async fn local_session_start_deduplicates_same_device_id() {
+        let core = Core::new(vec![], vec![]);
+        core.restore_state(PlaybackState {
+            nodes: vec![
+                Node {
+                    id: "local-device-1".to_string(),
+                    name: "Old iPhone".to_string(),
+                    connected: false,
+                    node_type: NodeType::Local,
+                    device_id: Some("device-1".to_string()),
+                    disconnected_at: Some(current_unix_timestamp().saturating_sub(60)),
+                    ..Default::default()
+                },
+                Node {
+                    id: "local-device-1-dup".to_string(),
+                    name: "Old iPhone Duplicate".to_string(),
+                    connected: false,
+                    node_type: NodeType::Local,
+                    device_id: Some("device-1".to_string()),
+                    disconnected_at: Some(current_unix_timestamp().saturating_sub(120)),
+                    ..Default::default()
+                },
+            ],
+            selected_node_id: None,
+            queue: vec![],
+            current_index: None,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+        })
+        .await;
+
+        let node_id = core
+            .local_session_start("Kana's iPhone", Some("device-1"))
+            .await
+            .unwrap();
+
+        let s = core.state.read().await;
+        let matching_nodes: Vec<_> = s
+            .nodes
+            .iter()
+            .filter(|node| node.device_id.as_deref() == Some("device-1"))
+            .collect();
+
+        assert_eq!(node_id, "local-device-1");
+        assert_eq!(matching_nodes.len(), 1);
+        assert_eq!(matching_nodes[0].name, "Kana's iPhone");
+        assert!(matching_nodes[0].connected);
+        assert_eq!(matching_nodes[0].disconnected_at, None);
+    }
+
+    #[tokio::test]
+    async fn cleanup_disconnected_nodes_removes_expired_local_nodes() {
+        let core = Core::new(vec![], vec![]);
+        core.restore_state(PlaybackState {
+            nodes: vec![
+                Node {
+                    id: "local-stale".to_string(),
+                    name: "Stale Local".to_string(),
+                    connected: false,
+                    node_type: NodeType::Local,
+                    device_id: Some("device-stale".to_string()),
+                    disconnected_at: Some(current_unix_timestamp().saturating_sub(120)),
+                    ..Default::default()
+                },
+                Node {
+                    id: "local-fresh".to_string(),
+                    name: "Fresh Local".to_string(),
+                    connected: false,
+                    node_type: NodeType::Local,
+                    device_id: Some("device-fresh".to_string()),
+                    disconnected_at: Some(current_unix_timestamp().saturating_sub(5)),
+                    ..Default::default()
+                },
+            ],
+            selected_node_id: None,
+            queue: vec![],
+            current_index: None,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+        })
+        .await;
+
+        core.cleanup_disconnected_nodes(std::time::Duration::from_secs(30))
+            .await;
+
+        let s = core.state.read().await;
+        assert!(s.node("local-stale").is_none());
+        assert!(s.node("local-fresh").is_some());
     }
 }
