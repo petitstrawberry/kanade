@@ -27,7 +27,7 @@ details later, see [DESIGN.md](DESIGN.md) and [protocols.md](protocols.md).
   local [MPD](https://www.musicpd.org/) daemon
 - **Built-in media serving** — artwork and track streaming are exposed by the
   server so clients can browse and play from a single place
-- **HLS streaming** — on-demand fMP4 remuxing for iOS/macOS clients (AVPlayer-compatible), with LRU disk cache and future ABR support
+- **HLS streaming** — on-demand fMP4 remuxing for clients
 
 ## Clients
 
