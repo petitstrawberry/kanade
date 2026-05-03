@@ -440,7 +440,7 @@ impl Core {
     pub async fn local_session_update(
         &self,
         node_id: &str,
-        queue: Vec<Track>,
+        queue: Option<Vec<Track>>,
         current_index: Option<usize>,
         position_secs: f64,
         status: PlaybackStatus,
@@ -455,7 +455,9 @@ impl Core {
                 return Err(CoreError::LocalSessionNotFound);
             }
             node.connected = true;
-            node.queue = queue;
+            if let Some(queue) = queue {
+                node.queue = queue;
+            }
             node.current_index = current_index;
             node.position_secs = position_secs;
             node.status = status;

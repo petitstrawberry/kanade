@@ -56,7 +56,8 @@ pub enum WsCommand {
     },
     LocalSessionStop,
     LocalSessionUpdate {
-        tracks: Vec<Track>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tracks: Option<Vec<Track>>,
         #[serde(default)]
         index: Option<usize>,
         position_secs: f64,
