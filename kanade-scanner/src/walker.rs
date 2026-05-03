@@ -58,7 +58,7 @@ pub fn walk_audio_files(root: &Path, extensions: &[&str]) -> Vec<AudioFileEntry>
     let root_depth = root.components().count();
 
     for result in WalkDir::new(root)
-        .follow_links(true)
+        .follow_links(false)
         .into_iter()
         .filter_entry(|entry| {
             if entry.path() == root {
@@ -201,5 +201,19 @@ mod tests {
 
         let entries = walk_audio_files(dir.path(), &["flac", "mp3"]);
         assert_eq!(entries.len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn does_not_follow_symlinks_outside_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("outside.flac"), "").unwrap();
+        symlink(outside.path(), root.path().join("linked")).unwrap();
+
+        let entries = walk_audio_files(root.path(), &["flac"]);
+        assert!(entries.is_empty());
     }
 }

@@ -9,6 +9,8 @@ const host = location.host;
 const SERVER_STORAGE_KEY = 'kanade_server';
 const sameOriginWsFallback = `${wsScheme}://${host}/ws`;
 const sameOriginMediaFallback = `${httpScheme}://${host}`;
+const URL_WITH_SCHEME = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//;
+const ALLOWED_SERVER_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:']);
 
 function normalizeSetting(raw: string | null | undefined): string | null {
   const value = raw?.trim();
@@ -18,14 +20,33 @@ function normalizeSetting(raw: string | null | undefined): string | null {
 function normalizeUrl(raw: string | null, fallback: string, scheme: string): string {
   const value = normalizeSetting(raw);
   if (!value) return fallback;
-  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(value)) return value;
+  if (URL_WITH_SCHEME.test(value)) {
+    try {
+      const parsed = new URL(value);
+      return ALLOWED_SERVER_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : fallback;
+    } catch {
+      return fallback;
+    }
+  }
   return `${scheme}://${value}`;
 }
 
 function buildWsUrl(raw: string | null, fallback: string): string {
-  const base = normalizeUrl(raw, fallback, wsScheme);
+  const base = normalizeWsBase(normalizeUrl(raw, fallback, wsScheme), fallback);
   if (base.endsWith('/ws')) return base;
   return `${base.replace(/\/+$/, '')}/ws`;
+}
+
+function normalizeWsBase(raw: string, fallback: string): string {
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+    if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+    if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return fallback;
+    return parsed.toString();
+  } catch {
+    return fallback;
+  }
 }
 
 function getServerQueryValue(): string | null {

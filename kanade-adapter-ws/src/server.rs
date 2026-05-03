@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path as StdPath, PathBuf},
     sync::{Arc, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -120,7 +120,7 @@ type WsStream = SplitStream<WebSocket>;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MEDIA_URL_TTL_SECS: u64 = 86_400;
+pub const MEDIA_URL_TTL_SECS: u64 = 900;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -359,6 +359,11 @@ async fn media_file_handler(
     let decoded = percent_decode(&path);
     if decoded.is_empty() || decoded.contains("..") {
         return simple_response(StatusCode::BAD_REQUEST, "Bad Request");
+    }
+
+    if !is_known_track_file(&state.db_path, &decoded).await {
+        warn!("rejected /media/file request for a non-library path");
+        return simple_response(StatusCode::NOT_FOUND, "Not Found");
     }
 
     serve_path_with_range(
@@ -1317,19 +1322,22 @@ async fn handle_request(req: WsRequest, state: &AppState, media_auth_key_id: &st
             };
 
             let exp = current_unix_timestamp().saturating_add(MEDIA_URL_TTL_SECS);
-            let urls = paths
-                .into_iter()
-                .map(|path| {
-                    let url = build_signed_media_url(
-                        &state.media_base_url,
-                        &path,
-                        media_auth_key_id,
-                        &key,
-                        exp,
-                    );
-                    (path, url)
-                })
-                .collect();
+            let mut urls = HashMap::new();
+            for path in paths {
+                if !is_signable_media_path(&state.db_path, &path).await {
+                    warn!("rejected media signing request for a non-library path");
+                    continue;
+                }
+
+                let url = build_signed_media_url(
+                    &state.media_base_url,
+                    &path,
+                    media_auth_key_id,
+                    &key,
+                    exp,
+                );
+                urls.insert(path, url);
+            }
             WsResponse::SignedUrls { urls }
         }
         WsRequest::GetPlaylists => {
@@ -1371,6 +1379,112 @@ async fn handle_request(req: WsRequest, state: &AppState, media_auth_key_id: &st
     }
 }
 
+async fn is_signable_media_path(db_path: &StdPath, path: &str) -> bool {
+    if path.is_empty() || path.contains('?') || path.contains('#') || path.contains('\0') {
+        return false;
+    }
+
+    if let Some(track_id) = single_path_segment(path, "/media/tracks/") {
+        return is_known_track_id(db_path, track_id).await;
+    }
+
+    if let Some(album_id) = single_path_segment(path, "/media/art/") {
+        return is_known_album_id(db_path, album_id).await;
+    }
+
+    if let Some(track_id) = hls_track_id(path) {
+        return is_known_track_id(db_path, track_id).await;
+    }
+
+    if let Some(raw_path) = path.strip_prefix("/media/file/") {
+        let decoded = percent_decode(raw_path);
+        return is_valid_media_file_path(&decoded) && is_known_track_file(db_path, &decoded).await;
+    }
+
+    false
+}
+
+fn single_path_segment<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let segment = path.strip_prefix(prefix)?;
+    if segment.is_empty() || segment.contains('/') || segment.contains("..") {
+        return None;
+    }
+    Some(segment)
+}
+
+fn hls_track_id(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/media/hls/")?;
+    let mut parts = rest.split('/');
+    let track_id = parts.next()?;
+    let variant = parts.next()?;
+    let resource = parts.next()?;
+
+    if parts.next().is_some()
+        || track_id.is_empty()
+        || variant.is_empty()
+        || track_id.contains("..")
+        || variant.contains("..")
+    {
+        return None;
+    }
+
+    if resource == "index.m3u8"
+        || resource == "init.mp4"
+        || (resource.starts_with("seg") && resource.ends_with(".m4s"))
+    {
+        Some(track_id)
+    } else {
+        None
+    }
+}
+
+fn is_valid_media_file_path(path: &str) -> bool {
+    !path.is_empty() && !path.contains('\0') && !path.contains("..")
+}
+
+async fn is_known_track_id(db_path: &StdPath, track_id: &str) -> bool {
+    let db_path = db_path.to_path_buf();
+    let track_id = track_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        Database::open(&db_path)
+            .ok()
+            .and_then(|db| db.get_track_by_id(&track_id).ok().flatten())
+            .is_some()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn is_known_album_id(db_path: &StdPath, album_id: &str) -> bool {
+    let db_path = db_path.to_path_buf();
+    let album_id = album_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        Database::open(&db_path)
+            .ok()
+            .and_then(|db| db.get_album_by_id(&album_id).ok().flatten())
+            .is_some()
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn is_known_track_file(db_path: &StdPath, file_path: &str) -> bool {
+    let db_path = db_path.to_path_buf();
+    let file_path = file_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        if !StdPath::new(&file_path).is_file() {
+            return false;
+        }
+
+        Database::open(&db_path)
+            .ok()
+            .and_then(|db| db.get_track_by_path(&file_path).ok().flatten())
+            .is_some()
+    })
+    .await
+    .unwrap_or(false)
+}
+
 async fn serve_path_with_range(
     method: &Method,
     path: &str,
@@ -1391,6 +1505,9 @@ async fn serve_path_with_range(
         }
     };
     let total_len = metadata.len();
+    if !metadata.is_file() {
+        return simple_response(StatusCode::NOT_FOUND, "Not Found");
+    }
 
     let (start, end, status) = match parse_range(range_header, total_len) {
         Ok(Some((start, end))) => (start, end, StatusCode::PARTIAL_CONTENT),
@@ -1414,38 +1531,6 @@ async fn serve_path_with_range(
 
     let body = if method == Method::HEAD || content_length == 0 {
         Body::empty()
-    } else if range_header.is_some() {
-        if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
-            warn!(path = %path, error = %e, "failed to seek file");
-            return simple_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error");
-        }
-
-        let mut remaining = content_length;
-        let mut data = Vec::with_capacity(content_length as usize);
-        let mut buf = vec![0u8; READ_CHUNK_SIZE.min(content_length as usize)];
-
-        while remaining > 0 {
-            let to_read = remaining.min(buf.len() as u64) as usize;
-            let n = match file.read(&mut buf[..to_read]).await {
-                Ok(n) => n,
-                Err(e) => {
-                    warn!(path = %path, error = %e, "failed to read ranged file body");
-                    return simple_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal Server Error",
-                    );
-                }
-            };
-
-            if n == 0 {
-                break;
-            }
-
-            data.extend_from_slice(&buf[..n]);
-            remaining -= n as u64;
-        }
-
-        Body::from(data)
     } else {
         if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
             warn!(path = %path, error = %e, "failed to seek file");

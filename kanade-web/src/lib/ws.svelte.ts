@@ -26,15 +26,24 @@ type PendingSignBatch = {
   }>;
 };
 
-const SIGNED_URL_TTL_MS = 15 * 60 * 1000;
+type QueuedMessage =
+  | { type: 'command'; message: WsCommand }
+  | { type: 'request'; requestId: number; message: ClientMessage };
+
+const DEFAULT_SIGNED_URL_TTL_MS = 5 * 60 * 1000;
+const SIGNED_URL_EXPIRY_SAFETY_MS = 30 * 1000;
 const SIGN_URL_BATCH_WINDOW_MS = 50;
+// This caps only transport messages waiting for the WebSocket to open, not the playback queue.
+// Bulk track additions stay in one command, and consecutive single-track additions are merged below.
+const MAX_QUEUED_MESSAGES = 200;
+const DEBUG_WS = import.meta.env.DEV;
 
 export class WsClient {
   private ws: WebSocket | null = null;
   private url: string;
   private reqId = 0;
   private pendingRequests = new Map<number, PendingRequest>();
-  private sendQueue: string[] = [];
+  private sendQueue: QueuedMessage[] = [];
   private reconnectTimeout: number | null = null;
   private connectTimeout: number | null = null;
   private heartbeatTimeout: number | null = null;
@@ -55,7 +64,7 @@ export class WsClient {
 
   private visibilityHandler = () => {
     if (document.visibilityState === 'visible' && !this.connected && this.active) {
-      console.log('WS: visibility restored, reconnecting');
+      if (DEBUG_WS) console.debug('WS: visibility restored, reconnecting');
       this.retryCount = 0;
       this.clearReconnectTimeout();
       this.connect();
@@ -67,7 +76,7 @@ export class WsClient {
   };
 
   private offlineHandler = () => {
-    console.log('WS: network offline');
+    if (DEBUG_WS) console.debug('WS: network offline');
     this.cancelPendingSignBatch(new Error('Disconnected'));
     if (this.ws) {
       this.ws.onclose = null;
@@ -115,11 +124,11 @@ export class WsClient {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.clearConnectTimeout();
+      this.connected = true;
       while (this.sendQueue.length > 0) {
         const msg = this.sendQueue.shift()!;
-        ws.send(msg);
+        ws.send(JSON.stringify(msg.message));
       }
-      this.connected = true;
       this.retryCount = 0;
       this.resetHeartbeat();
     };
@@ -190,7 +199,7 @@ export class WsClient {
 
     const delay = this.retryCount === 0 ? 3000 : Math.min(1000 * Math.pow(2, this.retryCount), 5000);
     this.retryCount++;
-    console.log(`Reconnecting in ${delay}ms...`);
+    if (DEBUG_WS) console.debug(`Reconnecting in ${delay}ms...`);
 
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = null;
@@ -270,18 +279,17 @@ export class WsClient {
     }
   }
 
-  private sendRaw(json: string) {
+  private sendMessage(message: QueuedMessage): void {
     if (this.connected && this.ws) {
-      this.ws.send(json);
+      this.ws.send(JSON.stringify(message.message));
     } else {
-      this.sendQueue.push(json);
+      this.queueMessage(message);
     }
   }
 
   sendCommand(cmd: WsCommand) {
-    const msg: ClientMessage = cmd;
-    console.log('ws.sendCommand', msg, { connected: this.connected });
-    this.sendRaw(JSON.stringify(msg));
+    if (DEBUG_WS) console.debug('ws.sendCommand', { connected: this.connected, cmd: cmd.cmd });
+    this.sendMessage({ type: 'command', message: cmd });
   }
 
   sendRequest(req: WsRequest): Promise<any> {
@@ -301,8 +309,58 @@ export class WsClient {
       });
 
       const msg: ClientMessage = { ...req, req_id: id };
-      this.sendRaw(JSON.stringify(msg));
+      this.sendMessage({ type: 'request', requestId: id, message: msg });
     });
+  }
+
+  private queueMessage(message: QueuedMessage): void {
+    if (message.type === 'command' && this.mergeQueuedAddCommand(message.message)) {
+      return;
+    }
+
+    if (this.sendQueue.length >= MAX_QUEUED_MESSAGES) {
+      this.dropOldestQueuedMessage();
+    }
+    this.sendQueue.push(message);
+  }
+
+  private mergeQueuedAddCommand(cmd: WsCommand): boolean {
+    if (cmd.cmd !== 'add_to_queue' && cmd.cmd !== 'add_tracks_to_queue') {
+      return false;
+    }
+
+    const last = this.sendQueue[this.sendQueue.length - 1];
+    if (!last || last.type !== 'command') {
+      return false;
+    }
+
+    const previous = last.message;
+    if (previous.cmd !== 'add_to_queue' && previous.cmd !== 'add_tracks_to_queue') {
+      return false;
+    }
+
+    const previousTracks = previous.cmd === 'add_to_queue' ? [previous.track] : previous.tracks;
+    const nextTracks = cmd.cmd === 'add_to_queue' ? [cmd.track] : cmd.tracks;
+    last.message = { cmd: 'add_tracks_to_queue', tracks: [...previousTracks, ...nextTracks] };
+    return true;
+  }
+
+  private dropOldestQueuedMessage(): void {
+    const requestIndex = this.sendQueue.findIndex((message) => message.type === 'request');
+    const dropIndex = requestIndex >= 0 ? requestIndex : 0;
+    const [dropped] = this.sendQueue.splice(dropIndex, 1);
+    if (dropped?.type === 'request') {
+      this.rejectPendingRequest(dropped.requestId, new Error('WS send queue overflow'));
+    }
+    console.warn('WS send queue overflow; dropped oldest queued message');
+  }
+
+  private rejectPendingRequest(id: number, error: Error): void {
+    const req = this.pendingRequests.get(id);
+    if (!req) return;
+    window.clearTimeout(req.timeoutId);
+    req.reject(error);
+    this.pendingRequests.delete(id);
   }
 
   signUrls(paths: string[]): Promise<Map<string, string>> {
@@ -387,7 +445,7 @@ export class WsClient {
       for (const path in signedUrlObject) {
         const url = signedUrlObject[path];
         signedMap.set(path, url);
-        this.signedUrlCache.set(path, { url, expiresAt: now + SIGNED_URL_TTL_MS });
+        this.signedUrlCache.set(path, { url, expiresAt: signedUrlExpiresAt(url, now) });
       }
 
       for (const resolver of batch.resolvers) {
@@ -409,6 +467,18 @@ export class WsClient {
       resolver.reject(error);
     }
   }
+}
+
+function signedUrlExpiresAt(url: string, now: number): number {
+  try {
+    const parsed = new URL(url, window.location.href);
+    const exp = Number(parsed.searchParams.get('exp'));
+    if (Number.isFinite(exp) && exp > 0) {
+      return Math.max(now, exp * 1000 - SIGNED_URL_EXPIRY_SAFETY_MS);
+    }
+  } catch {}
+
+  return now + DEFAULT_SIGNED_URL_TTL_MS;
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

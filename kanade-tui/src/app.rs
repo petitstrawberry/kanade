@@ -441,6 +441,13 @@ impl App {
                     .borrow_mut()
                     .select(if empty { None } else { Some(0) });
             }
+            WsResponse::Tracks { tracks } => {
+                let empty = tracks.is_empty();
+                self.album_tracks = tracks;
+                self.library_detail
+                    .borrow_mut()
+                    .select(if empty { None } else { Some(0) });
+            }
             WsResponse::Artists { artists } => {
                 self.artists = artists;
                 self.library_list

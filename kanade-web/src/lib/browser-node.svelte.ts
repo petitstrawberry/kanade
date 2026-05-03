@@ -13,6 +13,7 @@ type RegistrationAck = {
 };
 
 const BROWSER_SESSION_NODE_ID_KEY = 'kanade-browser-session-node-id';
+const DEBUG_BROWSER_NODE = import.meta.env.DEV;
 
 type NodeCommand =
   | { type: 'play' }
@@ -101,7 +102,7 @@ export class BrowserNode {
 
   private visibilityHandler = () => {
     if (document.visibilityState === 'visible' && !this.registered && this.active) {
-      console.log('BrowserNode: visibility restored, reconnecting');
+      if (DEBUG_BROWSER_NODE) console.debug('BrowserNode: visibility restored, reconnecting');
       this.retryCount = 0;
       this.clearReconnectTimeout();
       this.openSocket();
@@ -110,7 +111,7 @@ export class BrowserNode {
 
   private onlineHandler = () => {
     if (this.active) {
-      console.log('BrowserNode: network online, reconnecting');
+      if (DEBUG_BROWSER_NODE) console.debug('BrowserNode: network online, reconnecting');
       this.retryCount = 0;
       this.clearReconnectTimeout();
       this.openSocket();
@@ -118,7 +119,7 @@ export class BrowserNode {
   };
 
   private offlineHandler = () => {
-    console.log('BrowserNode: network offline');
+    if (DEBUG_BROWSER_NODE) console.debug('BrowserNode: network offline');
     this.closeSocket();
   };
 
@@ -161,7 +162,7 @@ export class BrowserNode {
     this.resetConnectionState();
     this.closeSocket();
 
-    console.log('BrowserNode disconnected');
+    if (DEBUG_BROWSER_NODE) console.debug('BrowserNode disconnected');
   }
 
   destroy(): void {
@@ -216,7 +217,7 @@ export class BrowserNode {
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
 
     emitWsToast('Connecting browser output…');
-    console.log(`BrowserNode connecting: ${this.wsUrl}`);
+    if (DEBUG_BROWSER_NODE) console.debug('BrowserNode connecting');
     const ws = new WebSocket(this.wsUrl);
     this.ws = ws;
     this.registered = false;
@@ -226,7 +227,7 @@ export class BrowserNode {
     ws.onopen = () => {
       if (this.ws !== ws) return;
       this.clearConnectTimeout();
-      console.log(`BrowserNode connected: ${this.wsUrl}`);
+      if (DEBUG_BROWSER_NODE) console.debug('BrowserNode connected');
       this.sendRegistration();
       this.resetHeartbeat();
       this.clearRegistrationTimeout();
@@ -255,7 +256,7 @@ export class BrowserNode {
       this.resetConnectionState();
 
       if (wasConnected) {
-        console.log('BrowserNode disconnected from server');
+        if (DEBUG_BROWSER_NODE) console.debug('BrowserNode disconnected from server');
       }
 
       if (this.active) {
@@ -278,7 +279,7 @@ export class BrowserNode {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.name || !this.logicalNodeId) return;
     try {
       this.ws.send(JSON.stringify({ node_id: this.logicalNodeId, display_name: this.name }));
-      console.log(`BrowserNode registering: ${this.logicalNodeId} (${this.name})`);
+      if (DEBUG_BROWSER_NODE) console.debug('BrowserNode registering');
     } catch (error) {
       console.warn('BrowserNode failed to send registration', error);
     }
@@ -325,8 +326,7 @@ export class BrowserNode {
       updateMediaBase(msg.media_base_url);
       this.clearRegistrationTimeout();
       this.startStateUpdates();
-      console.log(`BrowserNode registered: ${this.nodeId}`);
-      console.log(`BrowserNode media base URL: ${this.mediaBaseUrl}`);
+      if (DEBUG_BROWSER_NODE) console.debug('BrowserNode registered');
       return;
     }
 
@@ -343,7 +343,7 @@ export class BrowserNode {
   }
 
   private async handleReadyCommand(command: NodeCommand): Promise<void> {
-    console.log('BrowserNode command', command);
+    if (DEBUG_BROWSER_NODE) console.debug('BrowserNode command', command.type);
     switch (command.type) {
       case 'play':
         this.safePlayerCall(() => this.player.play());

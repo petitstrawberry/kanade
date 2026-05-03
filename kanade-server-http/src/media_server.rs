@@ -1,4 +1,7 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use kanade_db::Database;
 use lofty::{prelude::*, probe::Probe};
@@ -290,6 +293,12 @@ async fn handle_connection(stream: TcpStream, db_path: PathBuf) -> Result<(), St
                 return Ok(());
             }
 
+            if !is_known_track_file(&db_path, &decoded).await {
+                warn!("rejected /media/file request for a non-library path");
+                write_simple_response(&mut writer, 404, "Not Found", &[]).await?;
+                return Ok(());
+            }
+
             let content_type = content_type_for_path(&decoded);
             match File::open(&decoded).await {
                 Ok(mut file) => {
@@ -440,6 +449,27 @@ async fn serve_static_file(
     serve_file_with_range(writer, method, &mut file, content_type, None).await
 }
 
+async fn is_known_track_file(db_path: &Path, file_path: &str) -> bool {
+    if file_path.is_empty() || file_path.contains('\0') || file_path.contains("..") {
+        return false;
+    }
+
+    let db_path = db_path.to_path_buf();
+    let file_path = file_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        if !Path::new(&file_path).is_file() {
+            return false;
+        }
+
+        Database::open(&db_path)
+            .ok()
+            .and_then(|db| db.get_track_by_path(&file_path).ok().flatten())
+            .is_some()
+    })
+    .await
+    .unwrap_or(false)
+}
+
 async fn serve_file_with_range(
     writer: &mut tokio::net::tcp::OwnedWriteHalf,
     method: &str,
@@ -452,6 +482,9 @@ async fn serve_file_with_range(
         .await
         .map_err(|e| format!("metadata: {e}"))?;
     let total_len = metadata.len();
+    if !metadata.is_file() {
+        return Err("not a regular file".to_string());
+    }
 
     let (start, end, status_code, status_text) =
         match parse_range(range_header.as_deref(), total_len) {
