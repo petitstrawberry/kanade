@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use kanade_core::{error::CoreError, ports::AudioOutput};
 use sha2::{Digest, Sha256};
@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::client::MpdClient;
 
 type HmacSha256 = Hmac<Sha256>;
+/// Keep MPD-generated signed URLs aligned with the server-side media URL TTL.
 const MEDIA_URL_TTL_SECS: u64 = 15 * 60;
 
 struct MediaAuth {
@@ -101,10 +102,14 @@ fn compute_media_signature(key: &[u8; 32], path: &str, exp: u64) -> Vec<u8> {
 }
 
 fn current_unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(e) => {
+            let fallback = u64::MAX.saturating_sub(MEDIA_URL_TTL_SECS);
+            warn!(error = %e, fallback, "system clock is before UNIX_EPOCH, using fallback timestamp for media URL signing");
+            fallback
+        }
+    }
 }
 
 #[cfg(test)]

@@ -231,14 +231,14 @@ async fn run_session(
         .send(Message::Text(serde_json::to_string(&registration)?))
         .await?;
 
-    let (node_id, media_base_url, media_auth): (String, String, Option<(String, [u8; 32])>) = loop {
+    let (node_id, media_base_url, media_hmac_auth): (String, String, Option<(String, [u8; 32])>) = loop {
         match tokio::time::timeout(Duration::from_secs(10), ws_rx.next()).await {
             Err(_) => return Err(anyhow::anyhow!("handshake timed out")),
             Ok(Some(Ok(Message::Text(text)))) => {
                 match serde_json::from_str::<NodeRegistrationAck>(&text) {
                     Ok(ack) => {
-                        let media_auth = parse_media_auth(&ack);
-                        break (ack.node_id, ack.media_base_url, media_auth);
+                        let media_hmac_auth = parse_media_auth(&ack);
+                        break (ack.node_id, ack.media_base_url, media_hmac_auth);
                     }
                     Err(e) => warn!("Unexpected message before ack: {e}"),
                 }
@@ -253,7 +253,7 @@ async fn run_session(
 
     info!(
         "Registered: node_id={node_id}, media_base_url={media_base_url}, media_auth={}",
-        media_auth.is_some()
+        media_hmac_auth.is_some()
     );
 
     {
@@ -270,7 +270,7 @@ async fn run_session(
         broadcaster.retarget(state_tx).await;
 
         // ── Renderer (rebuilt each session in case media_base_url changed) ─
-        let renderer = match media_auth {
+        let renderer = match media_hmac_auth {
             Some((ref key_id, key)) => Arc::new(MpdRenderer::new_with_media_auth(
                 mpd_host,
                 mpd_port,
