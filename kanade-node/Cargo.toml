@@ -19,5 +19,6 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+hex = { workspace = true }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"

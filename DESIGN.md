@@ -89,7 +89,7 @@ The kanade protocol is a WebSocket JSON protocol used for communication between 
 
 1. Output node connects to `WS_ADDR` (default `0.0.0.0:8080`).
 2. Node sends `NodeRegistration` — announces a human-readable `name`.
-3. Server sends `NodeRegistrationAck` — assigns a UUID as the `node_id` and provides the `media_base_url` the node must use when constructing track URIs for its local audio backend.
+3. Server sends `NodeRegistrationAck` — assigns a UUID as the `node_id`, provides the `media_base_url`, and includes an HMAC key/id pair used by the node to sign media URLs for MPD.
 
 #### Commands (Server → Node)
 
@@ -141,8 +141,8 @@ WsServer.accept()
 main()
 ├── connect to SERVER_ADDR (default ws://127.0.0.1:8080)
 ├── send NodeRegistration
-├── receive NodeRegistrationAck (get media_base_url)
-├── create MpdRenderer (using media_base_url)
+├── receive NodeRegistrationAck (get media_base_url + media_auth_key[_id])
+├── create MpdRenderer (using media_base_url, signs MPD media URLs with HMAC)
 ├── create local PlaybackState
 ├── spawn MpdStateSync (polls local MPD, sends NodeStateUpdate to server)
 └── relay loop: NodeCommand → MpdRenderer, MpdStateSync → NodeStateUpdate
