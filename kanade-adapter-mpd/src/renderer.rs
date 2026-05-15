@@ -9,8 +9,9 @@ use sha2::{Digest, Sha256};
 use crate::client::MpdClient;
 
 type HmacSha256 = Hmac<Sha256>;
-/// Keep MPD-generated signed URLs aligned with the server-side media URL TTL.
-const MEDIA_URL_TTL_SECS: u64 = 15 * 60;
+/// MPD fetches queued URLs lazily, so node-signed media URLs need a longer TTL
+/// than the interactive clients that request fresh URLs on demand.
+const MEDIA_URL_TTL_SECS: u64 = 24 * 60 * 60;
 
 struct MediaAuth {
     key_id: String,
@@ -138,7 +139,7 @@ mod tests {
         let uri = renderer.media_uri_at("/music/track.flac", 1_700_000_000);
         assert_eq!(
             uri,
-            "https://example.com/media/tracks/4d7bca5e140a88117639c432b89240f072969fea064dece62c8ba745c0daf141?kid=kid-123&exp=1700000900&sig=93c4e57bc73fa82b9ea338d722a8858aabc4579250a79d3e09e74e3b3ddecc73"
+            "https://example.com/media/tracks/4d7bca5e140a88117639c432b89240f072969fea064dece62c8ba745c0daf141?kid=kid-123&exp=1700086400&sig=95f083899bfb5eeb67ab0662a2ab2c8da2edb9387bc3342c9bcd48182176d2d2"
         );
     }
 

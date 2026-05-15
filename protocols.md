@@ -319,12 +319,12 @@ signature = HMAC-SHA256(key_bytes, message)
 
 **Security properties:**
 - Signing keys are never exposed to clients
-- URLs expire after 15 minutes
+- URLs returned by `sign_urls` expire after 15 minutes
 - Per-session keys, revoked on WebSocket disconnect
 - Constant-time signature comparison prevents timing attacks
 - `Referrer-Policy: no-referrer` on all media elements prevents URL leakage via Referer headers
 
-**Node connections** receive the raw signing key (`media_auth_key`) in their registration ack and sign URLs client-side, since nodes construct media URLs independently without a persistent request/response channel.
+**Node connections** receive the raw signing key (`media_auth_key`) in their registration ack and sign URLs client-side, since nodes construct media URLs independently without a persistent request/response channel. Queue-driven outputs such as MPD may sign URLs with a longer expiry so tracks deeper in the queue are still playable when fetched later.
 
 ### 3.1 Request Format
 
