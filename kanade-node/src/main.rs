@@ -17,13 +17,14 @@
 //!
 //! # Configuration (environment variables)
 //!
-//! | Variable          | Default               | Description                        |
-//! |-------------------|-----------------------|------------------------------------|
-//! | `NODE_NAME`       | `node`                | Human-readable name for this node  |
-//! | `SERVER_ADDR`     | `127.0.0.1:8080`     | Kanade server address (host:port)   |
-//! | `MPD_HOST`        | `127.0.0.1`           | Local MPD host                     |
-//! | `MPD_PORT`        | `6600`                | Local MPD port                     |
-//! | `LOCAL_PROXY_PORT`| `18080`               | Local HTTP media-proxy port        |
+//! | Variable               | Default               | Description                                         |
+//! |------------------------|-----------------------|-----------------------------------------------------|
+//! | `NODE_NAME`            | `node`                | Human-readable name for this node                   |
+//! | `SERVER_ADDR`          | `127.0.0.1:8080`     | Kanade server address (host:port)                    |
+//! | `MPD_HOST`             | `127.0.0.1`           | Local MPD host                                      |
+//! | `MPD_PORT`             | `6600`                | Local MPD port                                      |
+//! | `MEDIA_PROXY_BIND_ADDR`| `127.0.0.1:18080`    | Address the media proxy listens on                  |
+//! | `MEDIA_PROXY_URL`      | (derived from bind addr) | Base URL that MPD uses to reach the proxy        |
 
 use std::{
     sync::{
@@ -117,21 +118,20 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6600);
-    let proxy_port: u16 = std::env::var("LOCAL_PROXY_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(18080);
+    let proxy_bind_addr = std::env::var("MEDIA_PROXY_BIND_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:18080".to_string());
+    let proxy_url = std::env::var("MEDIA_PROXY_URL").unwrap_or_default();
 
     info!("Kanade output node starting: name={node_name}, server={server_addr}");
 
     // ── Local media proxy (lives for the lifetime of the process) ─────────────
     //
-    // MPD receives loopback URLs (http://127.0.0.1:{proxy_port}/media/tracks/…).
+    // MPD receives the proxy base URL (e.g. http://127.0.0.1:{port}/media/tracks/…).
     // When MPD fetches a queued URL the proxy re-signs it with the current
     // session key and issues an HTTP 302 redirect to the real Kanade server.
     // This ensures the signed URL is always fresh at the moment of playback,
     // regardless of how long the track has been sitting in the queue.
-    let media_proxy = proxy::MediaProxy::new(proxy_port);
+    let media_proxy = proxy::MediaProxy::new(proxy_bind_addr, proxy_url);
     {
         let proxy = media_proxy.clone();
         tokio::spawn(async move { proxy.run().await });
@@ -298,9 +298,9 @@ async fn run_session(
 
         // ── Renderer — always points at the local proxy ───────────────────
         //
-        // The proxy URL (http://127.0.0.1:{proxy_port}) never changes, so the
-        // renderer does not need the auth key itself.  Signing happens inside
-        // the proxy at the moment MPD requests each track.
+        // The proxy URL never changes after startup, so the renderer does not
+        // need the auth key itself.  Signing happens inside the proxy at the
+        // moment MPD requests each track.
         let renderer = Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_proxy.base_url()));
         if let Err(e) = renderer.clear().await {
             warn!("Failed to clear stale MPD queue: {e}");
