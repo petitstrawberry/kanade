@@ -41,7 +41,8 @@ use kanade_core::{
     ports::{AudioOutput, EventBroadcaster},
     state::PlaybackState,
 };
-use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeRegistrationAck, NodeStateUpdate};
+use kanade_node_protocol::NodeRegistrationAck;
+use kanade_node_protocol::{NodeCommand, NodeRegistration, NodeStateUpdate};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -230,12 +231,15 @@ async fn run_session(
         .send(Message::Text(serde_json::to_string(&registration)?))
         .await?;
 
-    let (node_id, media_base_url): (String, String) = loop {
+    let (node_id, media_base_url, media_hmac_auth): (String, String, Option<(String, [u8; 32])>) = loop {
         match tokio::time::timeout(Duration::from_secs(10), ws_rx.next()).await {
             Err(_) => return Err(anyhow::anyhow!("handshake timed out")),
             Ok(Some(Ok(Message::Text(text)))) => {
                 match serde_json::from_str::<NodeRegistrationAck>(&text) {
-                    Ok(ack) => break (ack.node_id, ack.media_base_url),
+                    Ok(ack) => {
+                        let media_hmac_auth = parse_media_auth(&ack);
+                        break (ack.node_id, ack.media_base_url, media_hmac_auth);
+                    }
                     Err(e) => warn!("Unexpected message before ack: {e}"),
                 }
             }
@@ -247,7 +251,10 @@ async fn run_session(
         }
     };
 
-    info!("Registered: node_id={node_id}, media_base_url={media_base_url}");
+    info!(
+        "Registered: node_id={node_id}, media_base_url={media_base_url}, media_auth={}",
+        media_hmac_auth.is_some()
+    );
 
     {
         let mut state = local_state.write().await;
@@ -263,7 +270,16 @@ async fn run_session(
         broadcaster.retarget(state_tx).await;
 
         // ── Renderer (rebuilt each session in case media_base_url changed) ─
-        let renderer = Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_base_url));
+        let renderer = match media_hmac_auth {
+            Some((ref key_id, key)) => Arc::new(MpdRenderer::new_with_media_auth(
+                mpd_host,
+                mpd_port,
+                media_base_url.clone(),
+                key_id.clone(),
+                key,
+            )),
+            None => Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_base_url.clone())),
+        };
         if let Err(e) = renderer.clear().await {
             warn!("Failed to clear stale MPD queue: {e}");
         }
@@ -314,6 +330,34 @@ async fn run_session(
             }
         }
     }
+}
+
+fn parse_media_auth(ack: &NodeRegistrationAck) -> Option<(String, [u8; 32])> {
+    let (Some(key_id), Some(key_hex)) = (&ack.media_auth_key_id, &ack.media_auth_key) else {
+        return None;
+    };
+
+    let key_bytes = match hex::decode(key_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            warn!("invalid media_auth_key hex from server: {e}");
+            return None;
+        }
+    };
+
+    let key_len = key_bytes.len();
+    let key_array: [u8; 32] = match key_bytes.try_into() {
+        Ok(key) => key,
+        Err(_) => {
+            warn!(
+                "invalid media_auth_key length from server: expected 32 bytes, got {}",
+                key_len
+            );
+            return None;
+        }
+    };
+
+    Some((key_id.clone(), key_array))
 }
 
 /// Execute a [`NodeCommand`] against the local [`MpdRenderer`].

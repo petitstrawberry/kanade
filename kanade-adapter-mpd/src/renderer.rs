@@ -1,10 +1,21 @@
 use async_trait::async_trait;
-use tracing::{info, instrument};
+use hmac::{Hmac, KeyInit, Mac};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::{info, instrument, warn};
 
 use kanade_core::{error::CoreError, ports::AudioOutput};
 use sha2::{Digest, Sha256};
 
 use crate::client::MpdClient;
+
+type HmacSha256 = Hmac<Sha256>;
+/// Keep MPD-generated signed URLs aligned with the server-side media URL TTL.
+const MEDIA_URL_TTL_SECS: u64 = 15 * 60;
+
+struct MediaAuth {
+    key_id: String,
+    key: [u8; 32],
+}
 
 /// [`AudioOutput`] implementation that controls a local MPD daemon.
 ///
@@ -13,6 +24,7 @@ use crate::client::MpdClient;
 pub struct MpdRenderer {
     client: MpdClient,
     media_public_base_url: String,
+    media_auth: Option<MediaAuth>,
 }
 
 impl MpdRenderer {
@@ -27,10 +39,35 @@ impl MpdRenderer {
                 .into()
                 .trim_end_matches('/')
                 .to_string(),
+            media_auth: None,
+        }
+    }
+
+    pub fn new_with_media_auth(
+        host: impl Into<String>,
+        port: u16,
+        media_public_base_url: impl Into<String>,
+        media_auth_key_id: impl Into<String>,
+        media_auth_key: [u8; 32],
+    ) -> Self {
+        Self {
+            client: MpdClient::new(host, port),
+            media_public_base_url: media_public_base_url
+                .into()
+                .trim_end_matches('/')
+                .to_string(),
+            media_auth: Some(MediaAuth {
+                key_id: media_auth_key_id.into(),
+                key: media_auth_key,
+            }),
         }
     }
 
     fn media_uri(&self, value: &str) -> String {
+        self.media_uri_at(value, current_unix_timestamp())
+    }
+
+    fn media_uri_at(&self, value: &str, now: u64) -> String {
         if value.starts_with("http://") || value.starts_with("https://") {
             return value.to_string();
         }
@@ -38,12 +75,84 @@ impl MpdRenderer {
         let mut hasher = Sha256::new();
         hasher.update(value.as_bytes());
         let track_id = hex::encode(hasher.finalize());
-        format!("{}/media/tracks/{}", self.media_public_base_url, track_id)
+        let path = format!("/media/tracks/{track_id}");
+
+        if let Some(auth) = &self.media_auth {
+            let exp = now.saturating_add(MEDIA_URL_TTL_SECS);
+            let sig = hex::encode(compute_media_signature(&auth.key, &path, exp));
+            return format!(
+                "{}{}?kid={}&exp={}&sig={}",
+                self.media_public_base_url, path, auth.key_id, exp, sig
+            );
+        }
+
+        format!("{}{}", self.media_public_base_url, path)
     }
 
     fn quote_mpd_arg(value: &str) -> String {
         let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
         format!("\"{escaped}\"")
+    }
+}
+
+fn compute_media_signature(key: &[u8; 32], path: &str, exp: u64) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(key).expect("32-byte HMAC key should be valid");
+    mac.update(format!("GET:{path}:{exp}").as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+fn current_unix_timestamp() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(e) => {
+            let fallback = u64::MAX.saturating_sub(MEDIA_URL_TTL_SECS);
+            warn!(error = %e, fallback, "system clock is before UNIX_EPOCH, using fallback timestamp for media URL signing");
+            fallback
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_uri_without_auth_uses_plain_track_url() {
+        let renderer = MpdRenderer::new("127.0.0.1", 6600, "https://example.com/");
+        let uri = renderer.media_uri_at("/music/track.flac", 1_700_000_000);
+        assert_eq!(
+            uri,
+            "https://example.com/media/tracks/4d7bca5e140a88117639c432b89240f072969fea064dece62c8ba745c0daf141"
+        );
+    }
+
+    #[test]
+    fn media_uri_with_auth_adds_signed_query() {
+        let renderer = MpdRenderer::new_with_media_auth(
+            "127.0.0.1",
+            6600,
+            "https://example.com/",
+            "kid-123",
+            [0x11; 32],
+        );
+        let uri = renderer.media_uri_at("/music/track.flac", 1_700_000_000);
+        assert_eq!(
+            uri,
+            "https://example.com/media/tracks/4d7bca5e140a88117639c432b89240f072969fea064dece62c8ba745c0daf141?kid=kid-123&exp=1700000900&sig=93c4e57bc73fa82b9ea338d722a8858aabc4579250a79d3e09e74e3b3ddecc73"
+        );
+    }
+
+    #[test]
+    fn media_uri_keeps_absolute_http_urls_unchanged() {
+        let renderer = MpdRenderer::new_with_media_auth(
+            "127.0.0.1",
+            6600,
+            "https://example.com/",
+            "kid-123",
+            [0x11; 32],
+        );
+        let uri = renderer.media_uri_at("https://cdn.example.com/a.flac", 1_700_000_000);
+        assert_eq!(uri, "https://cdn.example.com/a.flac");
     }
 }
 
