@@ -4,10 +4,11 @@
 //! Signed URLs added to the queue can therefore expire before MPD ever fetches
 //! them.  To fix this without extending the TTL we run a loopback HTTP proxy:
 //!
-//! 1. `MpdRenderer` receives `http://127.0.0.1:{proxy_port}` as its media base
-//!    URL (no auth key embedded in the URL).
+//! 1. `MpdRenderer` receives the proxy base URL (e.g.
+//!    `http://127.0.0.1:{proxy_port}`) as its media base URL (no auth key
+//!    embedded in the URL).
 //! 2. MPD stores and eventually requests
-//!    `http://127.0.0.1:{proxy_port}/media/tracks/{track_id}`.
+//!    `{proxy_base_url}/media/tracks/{track_id}`.
 //! 3. The proxy looks up the current session's signing key, computes a **fresh**
 //!    signed URL against the real Kanade server, and returns `HTTP 302 Found`.
 //! 4. MPD follows the redirect and fetches the freshly signed URL, which is
@@ -46,15 +47,27 @@ struct ProxyState {
 #[derive(Clone)]
 pub struct MediaProxy {
     state: Arc<RwLock<Option<ProxyState>>>,
-    port: u16,
+    bind_addr: String,
+    base_url: String,
 }
 
 impl MediaProxy {
-    /// Create a new proxy that will listen on `127.0.0.1:{port}`.
-    pub fn new(port: u16) -> Self {
+    /// Create a new proxy.
+    ///
+    /// * `bind_addr` — the address the proxy listens on (e.g. `"127.0.0.1:18080"`).
+    /// * `base_url`  — the URL that MPD should use to reach the proxy
+    ///   (e.g. `"http://127.0.0.1:18080"`).  When empty the URL is derived
+    ///   from `bind_addr` by prepending `"http://"`.
+    pub fn new(bind_addr: String, base_url: String) -> Self {
+        let base_url = if base_url.is_empty() {
+            format!("http://{bind_addr}")
+        } else {
+            base_url
+        };
         Self {
             state: Arc::new(RwLock::new(None)),
-            port,
+            bind_addr,
+            base_url,
         }
     }
 
@@ -71,13 +84,13 @@ impl MediaProxy {
 
     /// The base URL that `MpdRenderer` should use for its media URIs.
     pub fn base_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
+        self.base_url.clone()
     }
 
     /// Run the proxy accept loop.  Never returns under normal operation.
     pub async fn run(self) {
-        let addr = format!("127.0.0.1:{}", self.port);
-        let listener = match TcpListener::bind(&addr).await {
+        let addr = &self.bind_addr;
+        let listener = match TcpListener::bind(addr).await {
             Ok(l) => l,
             Err(e) => {
                 warn!("MediaProxy: failed to bind {addr}: {e}");
@@ -230,8 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn proxy_base_url_uses_configured_port() {
-        let proxy = MediaProxy::new(18080);
+    fn proxy_base_url_uses_configured_bind_addr() {
+        let proxy = MediaProxy::new("127.0.0.1:18080".to_string(), String::new());
         assert_eq!(proxy.base_url(), "http://127.0.0.1:18080");
+    }
+
+    #[test]
+    fn proxy_base_url_uses_explicit_url() {
+        let proxy = MediaProxy::new(
+            "0.0.0.0:18080".to_string(),
+            "http://host.docker.internal:18080".to_string(),
+        );
+        assert_eq!(proxy.base_url(), "http://host.docker.internal:18080");
     }
 }
