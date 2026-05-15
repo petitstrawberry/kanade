@@ -17,12 +17,13 @@
 //!
 //! # Configuration (environment variables)
 //!
-//! | Variable        | Default               | Description                        |
-//! |-----------------|-----------------------|------------------------------------|
-//! | `NODE_NAME`     | `node`                | Human-readable name for this node  |
-//! | `SERVER_ADDR`   | `127.0.0.1:8080`     | Kanade server address (host:port)   |
-//! | `MPD_HOST`      | `127.0.0.1`           | Local MPD host                     |
-//! | `MPD_PORT`      | `6600`                | Local MPD port                     |
+//! | Variable          | Default               | Description                        |
+//! |-------------------|-----------------------|------------------------------------|
+//! | `NODE_NAME`       | `node`                | Human-readable name for this node  |
+//! | `SERVER_ADDR`     | `127.0.0.1:8080`     | Kanade server address (host:port)   |
+//! | `MPD_HOST`        | `127.0.0.1`           | Local MPD host                     |
+//! | `MPD_PORT`        | `6600`                | Local MPD port                     |
+//! | `LOCAL_PROXY_PORT`| `18080`               | Local HTTP media-proxy port        |
 
 use std::{
     sync::{
@@ -47,6 +48,8 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+
+mod proxy;
 
 // ── NodeEventBroadcaster ──────────────────────────────────────────────────────
 
@@ -114,8 +117,25 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6600);
+    let proxy_port: u16 = std::env::var("LOCAL_PROXY_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(18080);
 
     info!("Kanade output node starting: name={node_name}, server={server_addr}");
+
+    // ── Local media proxy (lives for the lifetime of the process) ─────────────
+    //
+    // MPD receives loopback URLs (http://127.0.0.1:{proxy_port}/media/tracks/…).
+    // When MPD fetches a queued URL the proxy re-signs it with the current
+    // session key and issues an HTTP 302 redirect to the real Kanade server.
+    // This ensures the signed URL is always fresh at the moment of playback,
+    // regardless of how long the track has been sitting in the queue.
+    let media_proxy = proxy::MediaProxy::new(proxy_port);
+    {
+        let proxy = media_proxy.clone();
+        tokio::spawn(async move { proxy.run().await });
+    }
 
     // ── Shared state (lives across reconnections) ─────────────────────────────
     let local_state: Arc<RwLock<PlaybackState>> = Arc::new(RwLock::new(PlaybackState {
@@ -167,6 +187,7 @@ async fn main() -> Result<()> {
             &node_name,
             &mpd_host,
             mpd_port,
+            &media_proxy,
             &local_state,
             &projection_generation,
             &broadcaster,
@@ -208,6 +229,7 @@ async fn run_session(
     node_name: &str,
     mpd_host: &str,
     mpd_port: u16,
+    media_proxy: &proxy::MediaProxy,
     local_state: &Arc<RwLock<PlaybackState>>,
     projection_generation: &Arc<AtomicU64>,
     broadcaster: &Arc<NodeEventBroadcaster>,
@@ -256,6 +278,11 @@ async fn run_session(
         media_hmac_auth.is_some()
     );
 
+    // Update the local proxy with the fresh session credentials.
+    // The proxy re-signs URLs just-in-time, so MPD tracks added hours ago
+    // are still fetchable when playback reaches them.
+    media_proxy.update(media_base_url, media_hmac_auth).await;
+
     {
         let mut state = local_state.write().await;
         if let Some(node) = state.nodes.first_mut() {
@@ -269,17 +296,12 @@ async fn run_session(
         let (state_tx, mut state_rx) = mpsc::channel::<String>(64);
         broadcaster.retarget(state_tx).await;
 
-        // ── Renderer (rebuilt each session in case media_base_url changed) ─
-        let renderer = match media_hmac_auth {
-            Some((ref key_id, key)) => Arc::new(MpdRenderer::new_with_media_auth(
-                mpd_host,
-                mpd_port,
-                media_base_url.clone(),
-                key_id.clone(),
-                key,
-            )),
-            None => Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_base_url.clone())),
-        };
+        // ── Renderer — always points at the local proxy ───────────────────
+        //
+        // The proxy URL (http://127.0.0.1:{proxy_port}) never changes, so the
+        // renderer does not need the auth key itself.  Signing happens inside
+        // the proxy at the moment MPD requests each track.
+        let renderer = Arc::new(MpdRenderer::new(mpd_host, mpd_port, media_proxy.base_url()));
         if let Err(e) = renderer.clear().await {
             warn!("Failed to clear stale MPD queue: {e}");
         }
