@@ -104,7 +104,8 @@ async fn handle_request(stream: tokio::net::TcpStream, state: Arc<RwLock<Option<
 
     // Read request line.
     let mut request_line = String::new();
-    if reader.read_line(&mut request_line).await.is_err() {
+    if let Err(e) = reader.read_line(&mut request_line).await {
+        debug!("MediaProxy: failed to read request line: {e}");
         return;
     }
 
@@ -127,7 +128,7 @@ async fn handle_request(stream: tokio::net::TcpStream, state: Arc<RwLock<Option<
     }
 
     // Strip query string — MPD may append its own parameters.
-    let path_only = parts[1].split('?').next().unwrap_or(parts[1]);
+    let path_only = parts[1].split('?').next().unwrap();
 
     let Some(track_id) = path_only.strip_prefix("/media/tracks/") else {
         let _ = write_response(&mut writer, 404, None).await;
@@ -146,7 +147,16 @@ async fn handle_request(stream: tokio::net::TcpStream, state: Arc<RwLock<Option<
             let track_path = format!("/media/tracks/{track_id}");
             match &st.auth {
                 Some((key_id, key)) => {
-                    let exp = current_timestamp().saturating_add(MEDIA_URL_TTL_SECS);
+                    let now = match current_timestamp() {
+                        Some(t) => t,
+                        None => {
+                            warn!("MediaProxy: system clock unavailable, cannot sign URL");
+                            drop(guard);
+                            let _ = write_response(&mut writer, 503, None).await;
+                            return;
+                        }
+                    };
+                    let exp = now.saturating_add(MEDIA_URL_TTL_SECS);
                     let sig = sign(key, &track_path, exp);
                     format!(
                         "{}{track_path}?kid={key_id}&exp={exp}&sig={}",
@@ -193,11 +203,11 @@ fn sign(key: &[u8; 32], path: &str, exp: u64) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-fn current_timestamp() -> u64 {
+fn current_timestamp() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
+        .ok()
         .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
