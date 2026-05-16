@@ -36,6 +36,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// This matches the server-side policy; the URL is signed at the moment MPD
 /// requests the track so it is always freshly within this window.
 const MEDIA_URL_TTL_SECS: u64 = 15 * 60;
+const REFRESH_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const REFRESH_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const UPSTREAM_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct ProxyState {
     kanade_base_url: String,
@@ -69,16 +72,23 @@ impl MediaProxy {
         } else {
             base_url
         };
+        let probe_client = match reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(UPSTREAM_PROBE_TIMEOUT)
+            .build()
+        {
+            Ok(client) => client,
+            Err(e) => {
+                warn!("MediaProxy: failed to build configured HTTP client: {e}; falling back to default client");
+                reqwest::Client::new()
+            }
+        };
         Self {
             state: Arc::new(RwLock::new(None)),
             bind_addr,
             base_url,
             refresh_tx,
-            probe_client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("failed to build media proxy HTTP client"),
+            probe_client,
         }
     }
 
@@ -181,8 +191,10 @@ async fn handle_request(
 
     if has_auth && is_forbidden(&probe_client, &redirect_url).await {
         warn!("MediaProxy: detected 403 for signed URL; requesting key refresh and retrying once");
-        let _ = refresh_tx.try_send(());
-        if wait_for_new_generation(&state, generation, Duration::from_secs(5)).await {
+        if let Err(e) = refresh_tx.try_send(()) {
+            warn!("MediaProxy: failed to request key refresh: {e}");
+        }
+        if wait_for_new_generation(&state, generation, REFRESH_WAIT_TIMEOUT).await {
             if let Some((new_redirect_url, new_generation, _)) =
                 build_redirect_target(&state, &track_path).await
             {
@@ -244,7 +256,7 @@ async fn wait_for_new_generation(
         if changed {
             return true;
         }
-        sleep(Duration::from_millis(100)).await;
+        sleep(REFRESH_POLL_INTERVAL).await;
     }
     false
 }
