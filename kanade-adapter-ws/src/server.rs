@@ -748,7 +748,11 @@ async fn run_node_mode(
         .unwrap_or_else(|| display_name.clone());
 
     let (key_id, key) = state.media_key_store.generate();
+    // Tracks the key currently announced to the node so we can revoke the
+    // previous key after the overlap window on each broadcast rotation.
     let mut active_key_id = key_id.clone();
+    // Tracks all keys announced during this connection so we can revoke any
+    // remaining keys immediately on disconnect.
     let mut issued_key_ids = vec![key_id.clone()];
 
     let ack = ServerMessage::NodeRegistrationAck {
@@ -857,7 +861,7 @@ async fn run_node_mode(
                     Ok(Ok(())) => {
                         info!(peer = %peer, node_id = %node_id, key_id = %next_key_id, "broadcasted refreshed node media auth key");
                         let old_key_id = std::mem::replace(&mut active_key_id, next_key_id.clone());
-                        issued_key_ids.push(next_key_id);
+                        issued_key_ids.push(next_key_id.clone());
                         let store = Arc::clone(&state.media_key_store);
                         tokio::spawn(async move {
                             tokio::time::sleep(Duration::from_secs(NODE_MEDIA_KEY_OVERLAP_SECS)).await;
