@@ -2008,6 +2008,7 @@ dependencies = [
  "kanade-adapter-mpd",
  "kanade-core",
  "kanade-node-protocol",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
