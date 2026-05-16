@@ -68,6 +68,9 @@ receive a random UUID.
 | media_auth_key  | string? | Hex-encoded HMAC signing key (nodes only, for client-side URL signing) |
 | media_auth_key_id | string? | UUID key identifier (nodes only) |
 
+> Note: `NodeRegistrationAck` may be sent again during an active node session to rotate
+> media signing keys. Nodes should update their in-memory signing key immediately.
+
 ### 1.3 NodeCommand (Server → Node)
 
 Tagged union using `"type"` field. Mirrors the `AudioOutput` trait methods.
@@ -324,7 +327,9 @@ signature = HMAC-SHA256(key_bytes, message)
 - Constant-time signature comparison prevents timing attacks
 - `Referrer-Policy: no-referrer` on all media elements prevents URL leakage via Referer headers
 
-**Node connections** receive the raw signing key (`media_auth_key`) in their registration ack and sign URLs client-side, since nodes construct media URLs independently without a persistent request/response channel.
+**Node connections** receive the raw signing key (`media_auth_key`) in their registration ack and sign URLs client-side, since nodes construct media URLs independently without a persistent request/response channel.  
+For long-lived node sessions, the server periodically broadcasts refreshed node keys (with an overlap window before old-key revocation), and nodes should apply the pushed key.  
+Even with broadcast, node-side proxy retry on 403 remains required as a safety net.
 
 ### 3.1 Request Format
 

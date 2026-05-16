@@ -319,7 +319,18 @@ async fn run_session(
                                 Ok(cmd) => {
                                     execute_command(cmd, &renderer, projection_generation).await;
                                 }
-                                Err(e) => warn!("Unexpected message from server: {e}"),
+                                Err(cmd_err) => match serde_json::from_str::<NodeRegistrationAck>(&text) {
+                                    Ok(ack) => {
+                                        let media_hmac_auth = parse_media_auth(&ack);
+                                        media_proxy
+                                            .update(ack.media_base_url, media_hmac_auth)
+                                            .await;
+                                        info!("Received pushed media auth update from server");
+                                    }
+                                    Err(e) => warn!(
+                                        "Unexpected message from server: command parse error={cmd_err}, ack parse error={e}"
+                                    ),
+                                },
                             }
                         }
                         Some(Ok(Message::Ping(payload))) => {

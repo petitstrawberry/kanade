@@ -49,6 +49,8 @@ use crate::{
 
 const RECONNECT_GRACE_MS: u64 = 5000;
 const READ_CHUNK_SIZE: usize = 64 * 1024;
+const NODE_MEDIA_KEY_BROADCAST_INTERVAL_SECS: u64 = 10 * 60;
+const NODE_MEDIA_KEY_OVERLAP_SECS: u64 = 5 * 60;
 
 pub struct MediaKeyStore {
     keys: RwLock<HashMap<String, ([u8; 32], Instant)>>,
@@ -746,6 +748,8 @@ async fn run_node_mode(
         .unwrap_or_else(|| display_name.clone());
 
     let (key_id, key) = state.media_key_store.generate();
+    let mut active_key_id = key_id.clone();
+    let mut issued_key_ids = vec![key_id.clone()];
 
     let ack = ServerMessage::NodeRegistrationAck {
         ack: kanade_node_protocol::NodeRegistrationAck {
@@ -809,6 +813,9 @@ async fn run_node_mode(
 
     let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
     ping_interval.tick().await;
+    let mut media_key_broadcast_interval =
+        tokio::time::interval(Duration::from_secs(NODE_MEDIA_KEY_BROADCAST_INTERVAL_SECS));
+    media_key_broadcast_interval.tick().await;
     let mut last_seen = Instant::now();
 
     loop {
@@ -824,6 +831,46 @@ async fn run_node_mode(
                     Ok(Err(_)) => break,
                     Err(_) => {
                         warn!(peer = %peer, node_id = %node_id, "Node ping send timed out");
+                        break;
+                    }
+                }
+            }
+            _ = media_key_broadcast_interval.tick() => {
+                let (next_key_id, next_key) = state.media_key_store.generate();
+                let next_ack = ServerMessage::NodeRegistrationAck {
+                    ack: kanade_node_protocol::NodeRegistrationAck {
+                        node_id: node_id.clone(),
+                        media_base_url: state.media_base_url.clone(),
+                        media_auth_key: Some(hex::encode(next_key)),
+                        media_auth_key_id: Some(next_key_id.clone()),
+                    },
+                };
+                let next_ack_json = match serde_json::to_string(&next_ack) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        state.media_key_store.revoke(&next_key_id);
+                        warn!(peer = %peer, node_id = %node_id, error = %e, "Node failed to serialize key rotation ack");
+                        continue;
+                    }
+                };
+                match tokio::time::timeout(Duration::from_secs(5), ws_tx.send(Message::Text(next_ack_json.into()))).await {
+                    Ok(Ok(())) => {
+                        info!(peer = %peer, node_id = %node_id, key_id = %next_key_id, "broadcasted refreshed node media auth key");
+                        let old_key_id = std::mem::replace(&mut active_key_id, next_key_id.clone());
+                        issued_key_ids.push(next_key_id);
+                        let store = Arc::clone(&state.media_key_store);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(NODE_MEDIA_KEY_OVERLAP_SECS)).await;
+                            store.revoke(&old_key_id);
+                        });
+                    }
+                    Ok(Err(_)) => {
+                        state.media_key_store.revoke(&next_key_id);
+                        break;
+                    }
+                    Err(_) => {
+                        state.media_key_store.revoke(&next_key_id);
+                        warn!(peer = %peer, node_id = %node_id, "Node media key broadcast send timed out");
                         break;
                     }
                 }
@@ -890,6 +937,10 @@ async fn run_node_mode(
                 }
             }
         }
+    }
+
+    for key_id in issued_key_ids {
+        state.media_key_store.revoke(&key_id);
     }
 
     info!(node_id = %node_id, "Output node disconnected");
