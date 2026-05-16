@@ -301,4 +301,20 @@ mod tests {
             _ => panic!("wrong variant"),
         }
     }
+
+    #[test]
+    fn node_registration_ack_message_has_expected_shape() {
+        let msg = ServerMessage::NodeRegistrationAck {
+            ack: NodeRegistrationAck {
+                node_id: "node-1".to_string(),
+                media_base_url: "http://127.0.0.1:8080".to_string(),
+                media_auth_key: Some("aa".repeat(32)),
+                media_auth_key_id: Some("key-1".to_string()),
+            },
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"type\":\"node_registration_ack\""));
+        assert!(json.contains("\"node_id\":\"node-1\""));
+        assert!(json.contains("\"media_auth_key_id\":\"key-1\""));
+    }
 }

@@ -118,9 +118,10 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6600);
-    let proxy_bind_addr = std::env::var("MEDIA_PROXY_BIND_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:18080".to_string());
+    let proxy_bind_addr =
+        std::env::var("MEDIA_PROXY_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:18080".to_string());
     let proxy_url = std::env::var("MEDIA_PROXY_URL").unwrap_or_default();
+    let (proxy_refresh_tx, mut proxy_refresh_rx) = mpsc::channel::<()>(8);
 
     info!("Kanade output node starting: name={node_name}, server={server_addr}");
 
@@ -131,7 +132,7 @@ async fn main() -> Result<()> {
     // session key and issues an HTTP 302 redirect to the real Kanade server.
     // This ensures the signed URL is always fresh at the moment of playback,
     // regardless of how long the track has been sitting in the queue.
-    let media_proxy = proxy::MediaProxy::new(proxy_bind_addr, proxy_url);
+    let media_proxy = proxy::MediaProxy::new(proxy_bind_addr, proxy_url, proxy_refresh_tx);
     {
         let proxy = media_proxy.clone();
         tokio::spawn(async move { proxy.run().await });
@@ -191,6 +192,7 @@ async fn main() -> Result<()> {
             &local_state,
             &projection_generation,
             &broadcaster,
+            &mut proxy_refresh_rx,
         )
         .await
         {
@@ -233,6 +235,7 @@ async fn run_session(
     local_state: &Arc<RwLock<PlaybackState>>,
     projection_generation: &Arc<AtomicU64>,
     broadcaster: &Arc<NodeEventBroadcaster>,
+    proxy_refresh_rx: &mut mpsc::Receiver<()>,
 ) -> Result<()> {
     info!("Connecting to {server_addr} …");
 
@@ -316,7 +319,18 @@ async fn run_session(
                                 Ok(cmd) => {
                                     execute_command(cmd, &renderer, projection_generation).await;
                                 }
-                                Err(e) => warn!("Unexpected message from server: {e}"),
+                                Err(cmd_err) => match serde_json::from_str::<NodeRegistrationAck>(&text) {
+                                    Ok(ack) => {
+                                        let media_hmac_auth = parse_media_auth(&ack);
+                                        media_proxy
+                                            .update(ack.media_base_url, media_hmac_auth)
+                                            .await;
+                                        info!("Received pushed media auth update from server");
+                                    }
+                                    Err(e) => warn!(
+                                        "Unexpected message from server: command parse error={cmd_err}, ack parse error={e}"
+                                    ),
+                                },
                             }
                         }
                         Some(Ok(Message::Ping(payload))) => {
@@ -348,6 +362,10 @@ async fn run_session(
                             return Ok(());
                         }
                     }
+                }
+                Some(()) = proxy_refresh_rx.recv() => {
+                    warn!("Media proxy requested auth refresh; reconnecting to obtain a new signing key");
+                    return Ok(());
                 }
             }
         }
