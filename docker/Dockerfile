@@ -1,4 +1,4 @@
-FROM rust:1.94.1-trixie AS builder
+FROM rust:1.98.1-trixie AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
