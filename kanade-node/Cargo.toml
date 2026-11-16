@@ -22,6 +22,6 @@ tracing-subscriber = { workspace = true }
 hex = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 futures-util = "0.3"
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
